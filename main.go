@@ -127,7 +127,7 @@ func CreateSectionHeaderFromBuffer(buffer []byte) SectionHeader {
 		uint16(buffer[0]),
 		uint16(buffer[3])<<8 | uint16(buffer[4]),
 		uint8(buffer[5]) & 0x1f >> 1,
-		buffer[5]&0x1 == 0,
+		buffer[5]&0x1 != 0,
 		buffer[6],
 		buffer[7],
 	}
