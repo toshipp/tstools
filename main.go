@@ -175,12 +175,13 @@ func (d *SectionDecoder) Pour(packet *TSPacket) {
 			break
 		}
 		section_length := readLength(d.buffer[1:])
-		if uint(len(d.buffer)) < section_length+3 {
+		whole_sec_len := section_length + 3
+		if uint(len(d.buffer)) < whole_sec_len {
 			// not enough to parse desc
 			break
 		}
-		d.callback(d.buffer[:section_length])
-		d.buffer = d.buffer[section_length:]
+		d.callback(d.buffer[:whole_sec_len])
+		d.buffer = d.buffer[whole_sec_len:]
 	}
 }
 
@@ -268,7 +269,7 @@ func NewPMTSectionDecoder(callback func(*PMTSection)) *PMTSectionDecoder {
 		// todo decode program info
 		program_info := make([]Descriptor, 0)
 		stream_info := make([]StreamInfo, 0)
-		for p := 11 + program_info_length; p < uint(len(buffer))-CRC32Len; {
+		for p := 12 + program_info_length; p < uint(len(buffer))-CRC32Len; {
 			es_info_length := readLength(buffer[p+3:])
 			es_info := make([]Descriptor, 0)
 			stream_info = append(stream_info,
@@ -302,6 +303,10 @@ func NewPMTDecoder() *PMTDecoder {
 func (p *PMTDecoder) GetUpdateCallback() func(*PATSection) {
 	return func(sec *PATSection) {
 		for _, assoc := range sec.Assotiations {
+			if assoc.ProgramNumber == 0 {
+				// network PID
+				continue
+			}
 			if _, ok := p.decoders[assoc.PID]; !ok  {
 				p.decoders[assoc.PID] = NewPMTSectionDecoder(func(sec *PMTSection) { sec.Print() })
 			}
