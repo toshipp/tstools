@@ -1,19 +1,47 @@
-package main
+package libts
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
-	"log"
-	"os"
 )
 
-func readPID(buffer []byte) uint16 {
+func makeTable() []uint32 {
+	t := make([]uint32, 256)
+	for i := 0; i < 256; i++ {
+		crc := uint32(i) << 24
+		for j := 0; j < 8; j++ {
+			if crc & 0x80000000 != 0 {
+				crc = crc << 1 ^ 0x04c11db7
+			} else {
+				crc <<= 1
+			}
+		}
+		t[i] = crc
+	}
+	return t
+}
+var crc32table = makeTable()
+
+const (
+	PAT_PID = 0
+)
+
+// bigendian crc32
+func Crc32(data []byte) uint32 {
+	crc := ^uint32(0)
+	for _, x := range data {
+		i := byte(crc >> 24) ^ x
+		crc = crc32table[i] ^ (crc << 8)
+	}
+	return crc
+}
+
+func ReadPID(buffer []byte) uint16 {
 	return (uint16(buffer[0])<<8 | uint16(buffer[1])) & 0x1fff
 }
 
-func readLength(buffer []byte) uint {
+func ReadLength(buffer []byte) uint {
 	return (uint(buffer[0])<<8 | uint(buffer[1])) & 0xfff
 }
 
@@ -38,7 +66,8 @@ type TSPacket struct {
 	AdaptationFieldControl     uint8  //2bit
 	ContinuityCounter          uint8  //4bit
 	AdaptationField            AdaptationField
-	DataByte                   []byte
+	DataBytes                  []byte
+	RawData                    []byte
 }
 
 func ParseAdaptationField(data []byte) (AdaptationField, error) {
@@ -54,18 +83,19 @@ func ParsePacket(data []byte) (*TSPacket, error) {
 	packet.TransportError = data[1]&0x80 != 0
 	packet.PayloadUnitStart = data[1]&0x40 != 0
 	packet.TransportPriority = data[1] & 0x20 >> 5
-	packet.PID = (uint16(data[1]) & 0x1f << 8) | uint16(data[2])
+	packet.PID = ReadPID(data[1:])
 	packet.TransportScramblingControl = data[3] >> 6
 	packet.AdaptationFieldControl = data[3] & 0x30 >> 4
 	packet.ContinuityCounter = data[3] & 0x0f
+	packet.RawData = data
 	data_byte := data[4:]
 	if packet.HasAdaptationField() {
 		length := data_byte[0]
 		packet.AdaptationField, _ = ParseAdaptationField(data_byte[:1+length])
 		data_byte = data_byte[1+length:]
 	}
-	if packet.HasDataByte() {
-		packet.DataByte = data_byte
+	if packet.HasDataBytes() {
+		packet.DataBytes = data_byte
 	}
 	return packet, nil
 }
@@ -75,26 +105,27 @@ func (tsp *TSPacket) HasAdaptationField() bool {
 		tsp.AdaptationFieldControl == 3
 }
 
-func (tsp *TSPacket) HasDataByte() bool {
+func (tsp *TSPacket) HasDataBytes() bool {
 	return tsp.AdaptationFieldControl == 1 ||
 		tsp.AdaptationFieldControl == 3
 }
 
 func (pr *PacketReader) ReadPacket() (*TSPacket, error) {
 	buf := make([]byte, 188)
-	n, e := pr.reader.Read(buf)
-	if e != nil {
-		return nil, e
-	}
-	if n != 188 {
-		return nil, errors.New("Can not read one packet")
+	done := 0
+	for done < len(buf) {
+		n, e := pr.reader.Read(buf[done:])
+		if e != nil {
+			return nil, e
+		}
+		done += n
 	}
 	return ParsePacket(buf)
 }
 
 type ProgramAssotiation struct {
 	ProgramNumber uint16
-	PID           uint16 /* network PID / program map PID */
+	PID           uint16 /* network PID or program map PID */
 }
 
 func (a *ProgramAssotiation) Print() {
@@ -146,19 +177,26 @@ func (s *PATSection) Print() {
 	}
 }
 
+type SectionParseCallback func([] byte)
+
 type SectionDecoder struct {
 	started  bool
 	buffer   []byte
-	callback func([]byte)
+	callback SectionParseCallback
 }
 
-func (d *SectionDecoder) Pour(packet *TSPacket) {
+
+func NewSectionDecoder(callback SectionParseCallback) *SectionDecoder {
+	return &SectionDecoder{false, nil, callback}
+}
+
+func (d *SectionDecoder) Submit(packet *TSPacket) {
 	if packet.PayloadUnitStart {
 		d.started = true
-		pointer_field := packet.DataByte[0]
-		d.buffer = packet.DataByte[pointer_field+1:]
+		pointer_field := packet.DataBytes[0]
+		d.buffer = packet.DataBytes[pointer_field+1:]
 	} else if d.started {
-		d.buffer = append(d.buffer, packet.DataByte...)
+		d.buffer = append(d.buffer, packet.DataBytes...)
 	} else {
 		return
 	}
@@ -174,7 +212,7 @@ func (d *SectionDecoder) Pour(packet *TSPacket) {
 			// not enough to fetch desc len
 			break
 		}
-		section_length := readLength(d.buffer[1:])
+		section_length := ReadLength(d.buffer[1:])
 		whole_sec_len := section_length + 3
 		if uint(len(d.buffer)) < whole_sec_len {
 			// not enough to parse desc
@@ -185,34 +223,24 @@ func (d *SectionDecoder) Pour(packet *TSPacket) {
 	}
 }
 
-type PATSectionDecoder struct {
-	SectionDecoder
-}
-
 const PATHeaderLen uint = 8
 const CRC32Len uint = 4
 
-func NewPATSectionDecoder(callback func(*PATSection)) *PATSectionDecoder {
-	d := new(PATSectionDecoder)
-	d.callback = func(buffer []byte) {
+func NewPATSectionDecoder(callback func(*PATSection)) *SectionDecoder {
+	return NewSectionDecoder(func(buffer []byte) {
 		assoc_len := (uint(len(buffer)) - PATHeaderLen - CRC32Len) / 4
 		assocs := make([]ProgramAssotiation, assoc_len)
 		for i := uint(0); i < assoc_len; i++ {
 			p := PATHeaderLen + i*4
 			assocs[i].ProgramNumber = uint16(buffer[p])<<8 | uint16(buffer[p+1])
-			assocs[i].PID = readPID(buffer[p+2:])
+			assocs[i].PID = ReadPID(buffer[p+2:])
 		}
 		section := &PATSection{
 			CreateSectionHeaderFromBuffer(buffer),
 			assocs,
 		}
 		callback(section)
-	}
-	return d
-}
-
-type PMTSectionDecoder struct {
-	SectionDecoder
+	})
 }
 
 type Descriptor interface {
@@ -227,7 +255,7 @@ func (d *DummyDescriptor) Print() {
 
 type StreamInfo struct {
 	StreamType     uint8
-	elementary_PID uint16
+	ElementaryPID uint16
 	ESInfo         []Descriptor
 }
 
@@ -235,7 +263,7 @@ func (s *StreamInfo) Print() {
 	fmt.Printf(`stream type: %d
 elementary PID: %d
 descriptors:
-`, s.StreamType, s.elementary_PID)
+`, s.StreamType, s.ElementaryPID)
 	for _, desc := range s.ESInfo {
 		desc.Print()
 	}
@@ -244,38 +272,37 @@ descriptors:
 type PMTSection struct {
 	SectionHeader
 	PCR_PID     uint16
-	programinfo []Descriptor
-	streaminfo  []StreamInfo
+	ProgramInfo []Descriptor
+	StreamInfo  []StreamInfo
 }
 
 func (p *PMTSection) Print() {
 	p.SectionHeader.Print()
 	fmt.Printf("PCR PID: %d\n", p.PCR_PID)
 	fmt.Printf("descriptors:\n")
-	for _, desc := range p.programinfo {
+	for _, desc := range p.ProgramInfo {
 		desc.Print()
 	}
 	fmt.Printf("stream info:\n")
-	for _, si := range p.streaminfo {
+	for _, si := range p.StreamInfo {
 		si.Print()
 	}
 }
 
-func NewPMTSectionDecoder(callback func(*PMTSection)) *PMTSectionDecoder {
-	p := new(PMTSectionDecoder)
-	p.callback = func(buffer []byte) {
-		pcr_pid := readPID(buffer[8:])
-		program_info_length := readLength(buffer[10:])
+func NewPMTSectionDecoder(callback func(*PMTSection)) *SectionDecoder {
+	return NewSectionDecoder(func(buffer []byte) {
+		pcr_pid := ReadPID(buffer[8:])
+		program_info_length := ReadLength(buffer[10:])
 		// todo decode program info
 		program_info := make([]Descriptor, 0)
 		stream_info := make([]StreamInfo, 0)
 		for p := 12 + program_info_length; p < uint(len(buffer))-CRC32Len; {
-			es_info_length := readLength(buffer[p+3:])
+			es_info_length := ReadLength(buffer[p+3:])
 			es_info := make([]Descriptor, 0)
 			stream_info = append(stream_info,
 				StreamInfo{
 					uint8(buffer[p]),
-					readPID(buffer[p+1:]),
+					ReadPID(buffer[p+1:]),
 					es_info,
 				})
 			p += 5 + es_info_length
@@ -287,62 +314,5 @@ func NewPMTSectionDecoder(callback func(*PMTSection)) *PMTSectionDecoder {
 			stream_info,
 		}
 		callback(sec)
-
-	}
-	return p
-}
-
-type PMTDecoder struct {
-	decoders map[uint16]*PMTSectionDecoder
-}
-
-func NewPMTDecoder() *PMTDecoder {
-	return &PMTDecoder{make(map[uint16]*PMTSectionDecoder)}
-}
-
-func (p *PMTDecoder) GetUpdateCallback() func(*PATSection) {
-	return func(sec *PATSection) {
-		for _, assoc := range sec.Assotiations {
-			if assoc.ProgramNumber == 0 {
-				// network PID
-				continue
-			}
-			if _, ok := p.decoders[assoc.PID]; !ok  {
-				p.decoders[assoc.PID] = NewPMTSectionDecoder(func(sec *PMTSection) { sec.Print() })
-			}
-		}
-	}
-}
-
-func (p *PMTDecoder) Pour(packet *TSPacket) {
-	if _, ok := p.decoders[packet.PID]; ok {
-		p.decoders[packet.PID].Pour(packet)
-	}
-}
-
-func main() {
-	name := flag.String("filename", "", "input filename")
-	flag.Parse()
-	file, e := os.Open(*name)
-	if e != nil {
-		log.Fatal(e)
-	}
-	reader := NewPacketReader(file)
-	//patd := NewPATSectionDecoder(func(p *PATSection) { p.Print() })
-	pmtd := NewPMTDecoder()
-	patd := NewPATSectionDecoder(pmtd.GetUpdateCallback())
-	for {
-		packet, e := reader.ReadPacket()
-		if e != nil {
-			if e == io.EOF {
-				break
-			}
-			log.Fatal(e)
-		}
-		//fmt.Printf("sync byte: %x\n", packet.SyncByte)
-		if packet.PID == 0 {
-			patd.Pour(packet)
-		}
-		pmtd.Pour(packet)
-	}
+	})
 }
