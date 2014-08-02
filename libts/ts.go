@@ -27,6 +27,12 @@ const (
 	PAT_PID = 0
 )
 
+const (
+	// from ISO 13818-1 p.48 Table 2-29
+	StreamType_H262 = 0x02
+	StreamType_AAC_ADTS = 0x0f
+)
+
 // bigendian crc32
 func Crc32(data []byte) uint32 {
 	crc := ^uint32(0)
@@ -315,4 +321,93 @@ func NewPMTSectionDecoder(callback func(*PMTSection)) *SectionDecoder {
 		}
 		callback(sec)
 	})
+}
+
+
+//Currently, this does not suport full specification.
+type PESPacketHeader struct {
+	PacketStartCodePrefix uint32
+	StreamID uint8
+	PESPacketLength uint16
+	DataAlignmentIndicator bool
+	pts_dts_flags uint8
+	pts uint64
+}
+
+const PESPacketMustHeaderLength = 9
+
+const (
+	pd_not_started = iota
+	pd_started = iota
+	pd_header_parsed = iota
+)
+
+type PESPacketDecoder struct {
+	state int
+	buffer []byte
+	onHeader func(PESPacketHeader)
+	onData func([]byte)
+}
+
+func NewPESPacketDecoder(onHeader func(PESPacketHeader), onData func([]byte)) *PESPacketDecoder {
+	return &PESPacketDecoder{pd_not_started, nil, onHeader, onData}
+}
+
+func (d *PESPacketDecoder) Submit(packet *TSPacket) {
+	if d.state == pd_header_parsed {
+		if d.onData != nil {
+			d.onData(packet.DataBytes)
+		}
+		return
+	}
+	if packet.PayloadUnitStart {
+		d.state = pd_started
+		d.buffer = packet.DataBytes
+	} else if d.state == pd_started {
+		d.buffer = append(d.buffer, packet.DataBytes...)
+	} else {
+		return
+	}
+	if len(d.buffer) >= PESPacketMustHeaderLength {
+		pes_header_data_len := int(d.buffer[8])
+		if len(d.buffer) < pes_header_data_len + 9 {
+			return
+		}
+		start_code_prerix := uint32(d.buffer[0])<<16 | uint32(d.buffer[1])<<8 | uint32(d.buffer[2])
+		stream_id := d.buffer[3]
+		packet_len := uint16(ReadLength(d.buffer[4:]))
+		data_aligned := d.buffer[6] & 0x4 > 0
+		pts_dts_flags := d.buffer[7] >> 6
+		pts := uint64(0)
+		p := 9
+		if pts_dts_flags >= 2 {
+			pts = uint64(d.buffer[p]) & 0xe << 29
+			pts |= uint64(d.buffer[p+1]) << 22
+			pts |= uint64(d.buffer[p+2]) & 0xfe << 14
+			pts |= uint64(d.buffer[p+3]) << 7
+			pts |= uint64(d.buffer[p+4]) >> 1
+			p += 5
+		}
+		header := PESPacketHeader{
+			start_code_prerix,
+			stream_id,
+			packet_len,
+			data_aligned,
+			pts_dts_flags,
+			pts,
+		}
+		if d.onHeader != nil {
+			d.onHeader(header)
+		}
+		d.state = pd_header_parsed
+		if len(d.buffer) > pes_header_data_len + 9 {
+			if d.onData != nil {
+				d.onData(d.buffer[pes_header_data_len+9:])
+			}
+		}
+	}
+}
+
+func (p *PESPacketHeader) GetPTS() (uint64, bool) {
+	return p.pts, p.pts_dts_flags >= 2
 }
