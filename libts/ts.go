@@ -11,8 +11,8 @@ func makeTable() []uint32 {
 	for i := 0; i < 256; i++ {
 		crc := uint32(i) << 24
 		for j := 0; j < 8; j++ {
-			if crc & 0x80000000 != 0 {
-				crc = crc << 1 ^ 0x04c11db7
+			if crc&0x80000000 != 0 {
+				crc = crc<<1 ^ 0x04c11db7
 			} else {
 				crc <<= 1
 			}
@@ -21,6 +21,7 @@ func makeTable() []uint32 {
 	}
 	return t
 }
+
 var crc32table = makeTable()
 
 const (
@@ -29,7 +30,7 @@ const (
 
 const (
 	// from ISO 13818-1 p.48 Table 2-29
-	StreamType_H262 = 0x02
+	StreamType_H262     = 0x02
 	StreamType_AAC_ADTS = 0x0f
 )
 
@@ -37,7 +38,7 @@ const (
 func Crc32(data []byte) uint32 {
 	crc := ^uint32(0)
 	for _, x := range data {
-		i := byte(crc >> 24) ^ x
+		i := byte(crc>>24) ^ x
 		crc = crc32table[i] ^ (crc << 8)
 	}
 	return crc
@@ -183,14 +184,13 @@ func (s *PATSection) Print() {
 	}
 }
 
-type SectionParseCallback func([] byte)
+type SectionParseCallback func([]byte)
 
 type SectionDecoder struct {
 	started  bool
 	buffer   []byte
 	callback SectionParseCallback
 }
-
 
 func NewSectionDecoder(callback SectionParseCallback) *SectionDecoder {
 	return &SectionDecoder{false, nil, callback}
@@ -260,9 +260,9 @@ func (d *DummyDescriptor) Print() {
 }
 
 type StreamInfo struct {
-	StreamType     uint8
+	StreamType    uint8
 	ElementaryPID uint16
-	ESInfo         []Descriptor
+	ESInfo        []Descriptor
 }
 
 func (s *StreamInfo) Print() {
@@ -323,30 +323,29 @@ func NewPMTSectionDecoder(callback func(*PMTSection)) *SectionDecoder {
 	})
 }
 
-
 //Currently, this does not suport full specification.
 type PESPacketHeader struct {
-	PacketStartCodePrefix uint32
-	StreamID uint8
-	PESPacketLength uint16
+	PacketStartCodePrefix  uint32
+	StreamID               uint8
+	PESPacketLength        uint16
 	DataAlignmentIndicator bool
-	pts_dts_flags uint8
-	pts uint64
+	pts_dts_flags          uint8
+	pts                    uint64
 }
 
 const PESPacketMustHeaderLength = 9
 
 const (
-	pd_not_started = iota
-	pd_started = iota
+	pd_not_started   = iota
+	pd_started       = iota
 	pd_header_parsed = iota
 )
 
 type PESPacketDecoder struct {
-	state int
-	buffer []byte
+	state    int
+	buffer   []byte
 	onHeader func(PESPacketHeader)
-	onData func([]byte)
+	onData   func([]byte)
 }
 
 func NewPESPacketDecoder(onHeader func(PESPacketHeader), onData func([]byte)) *PESPacketDecoder {
@@ -354,29 +353,29 @@ func NewPESPacketDecoder(onHeader func(PESPacketHeader), onData func([]byte)) *P
 }
 
 func (d *PESPacketDecoder) Submit(packet *TSPacket) {
-	if d.state == pd_header_parsed {
-		if d.onData != nil {
-			d.onData(packet.DataBytes)
-		}
-		return
-	}
 	if packet.PayloadUnitStart {
 		d.state = pd_started
 		d.buffer = packet.DataBytes
 	} else if d.state == pd_started {
 		d.buffer = append(d.buffer, packet.DataBytes...)
+	} else if d.state == pd_header_parsed {
+		if d.onData != nil {
+			d.onData(packet.DataBytes)
+		}
+		return
 	} else {
+		// pd_not_started
 		return
 	}
 	if len(d.buffer) >= PESPacketMustHeaderLength {
 		pes_header_data_len := int(d.buffer[8])
-		if len(d.buffer) < pes_header_data_len + 9 {
+		if len(d.buffer) < pes_header_data_len+9 {
 			return
 		}
 		start_code_prerix := uint32(d.buffer[0])<<16 | uint32(d.buffer[1])<<8 | uint32(d.buffer[2])
 		stream_id := d.buffer[3]
 		packet_len := uint16(ReadLength(d.buffer[4:]))
-		data_aligned := d.buffer[6] & 0x4 > 0
+		data_aligned := d.buffer[6]&0x4 > 0
 		pts_dts_flags := d.buffer[7] >> 6
 		pts := uint64(0)
 		p := 9
@@ -400,7 +399,7 @@ func (d *PESPacketDecoder) Submit(packet *TSPacket) {
 			d.onHeader(header)
 		}
 		d.state = pd_header_parsed
-		if len(d.buffer) > pes_header_data_len + 9 {
+		if len(d.buffer) > pes_header_data_len+9 {
 			if d.onData != nil {
 				d.onData(d.buffer[pes_header_data_len+9:])
 			}
