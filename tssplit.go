@@ -1,17 +1,18 @@
 package main
 
 import (
+	"./libts"
+	"bufio"
 	"flag"
 	"io"
 	"log"
 	"os"
-	"bufio"
-	"./libts"
 )
 
 const oneseg_pid = 0x1fc8
 
 type PIDSet map[uint16]struct{}
+
 func NewPIDSet() PIDSet {
 	return make(PIDSet)
 }
@@ -47,7 +48,7 @@ func dump_pat(out io.Writer, pat *libts.TSPacket, pmts PIDSet) {
 	for in_pos < last_assoc_pos {
 		prog_num := uint16(data[in_pos])<<8 + uint16(data[in_pos+1])
 		pid := libts.ReadPID(data[in_pos+2:])
-		if prog_num == 0 || pmts.find(pid)  {
+		if prog_num == 0 || pmts.find(pid) {
 			if in_pos != out_pos {
 				copy(data[out_pos:out_pos+4], data[in_pos:in_pos+4])
 			}
@@ -61,7 +62,7 @@ func dump_pat(out io.Writer, pat *libts.TSPacket, pmts PIDSet) {
 	data[out_pos+2] = byte(crc >> 8)
 	data[out_pos+3] = byte(crc)
 	data[length_pos+1] = byte(out_pos + 4 - length_pos - 2)
-	for i := out_pos+4; i < uint(len(data)); i++ {
+	for i := out_pos + 4; i < uint(len(data)); i++ {
 		data[i] = 0xff
 	}
 	writeall(out, pat.RawData)
