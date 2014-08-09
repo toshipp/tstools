@@ -3,6 +3,7 @@ package main
 import (
 	"./libts"
 	"bufio"
+	"bytes"
 	"flag"
 	"io"
 	"log"
@@ -23,6 +24,9 @@ func (s PIDSet) find(pid uint16) bool {
 	_, ok := s[pid]
 	return ok
 }
+func (s PIDSet) size() int {
+	return len(s)
+}
 
 func writeall(w io.Writer, data []byte) error {
 	done := 0
@@ -36,7 +40,54 @@ func writeall(w io.Writer, data []byte) error {
 	return nil
 }
 
-func dump_pat(out io.Writer, pat *libts.TSPacket, pmts PIDSet) {
+func findKeepPID(reader io.Reader) (keep_pids PIDSet, err error) {
+	pmt_pids := NewPIDSet()
+	done_pmts := NewPIDSet()
+	keep_pids = NewPIDSet()
+	patd := libts.NewPATSectionDecoder(func(sec *libts.PATSection) {
+		for _, assoc := range sec.Assotiations {
+			if assoc.ProgramNumber == 0 {
+				keep_pids.add(assoc.PID)
+			} else if assoc.PID != oneseg_pid {
+				keep_pids.add(assoc.PID)
+				pmt_pids.add(assoc.PID)
+			}
+		}
+	})
+
+	var processing_pid uint16
+	pmtd := libts.NewPMTSectionDecoder(func(sec *libts.PMTSection) {
+		if done_pmts.find(processing_pid) {
+			return
+		}
+		keep_pids.add(sec.PCR_PID)
+		for _, info := range sec.StreamInfo {
+			keep_pids.add(info.ElementaryPID)
+		}
+		done_pmts.add(processing_pid)
+	})
+
+	pr := libts.NewPacketReader(reader)
+	for {
+		packet, e := pr.ReadPacket()
+		if e != nil {
+			err = e
+			return
+		}
+		if packet.PID == libts.PAT_PID {
+			patd.Submit(packet)
+		}
+		if pmt_pids.find(packet.PID) {
+			processing_pid = packet.PID
+			pmtd.Submit(packet)
+		}
+		if pmt_pids.size() > 0 && pmt_pids.size() == done_pmts.size() {
+			return
+		}
+	}
+}
+
+func dump_pat(out io.Writer, pat *libts.TSPacket, keep_pids PIDSet) error {
 	data := pat.DataBytes
 	head_pos := uint(data[0]) + 1
 	length_pos := head_pos + 1
@@ -48,7 +99,7 @@ func dump_pat(out io.Writer, pat *libts.TSPacket, pmts PIDSet) {
 	for in_pos < last_assoc_pos {
 		prog_num := uint16(data[in_pos])<<8 + uint16(data[in_pos+1])
 		pid := libts.ReadPID(data[in_pos+2:])
-		if prog_num == 0 || pmts.find(pid) {
+		if prog_num == 0 || keep_pids.find(pid) {
 			if in_pos != out_pos {
 				copy(data[out_pos:out_pos+4], data[in_pos:in_pos+4])
 			}
@@ -65,7 +116,28 @@ func dump_pat(out io.Writer, pat *libts.TSPacket, pmts PIDSet) {
 	for i := out_pos + 4; i < uint(len(data)); i++ {
 		data[i] = 0xff
 	}
-	writeall(out, pat.RawData)
+	return writeall(out, pat.RawData)
+}
+
+func dump_ts(keep_pids PIDSet, in io.Reader, out io.Writer) error {
+	pr := libts.NewPacketReader(in)
+	for {
+		packet, e := pr.ReadPacket()
+		if e != nil {
+			if e == io.EOF {
+				return nil
+			}
+			return e
+		}
+		if packet.PID == libts.PAT_PID {
+			e = dump_pat(out, packet, keep_pids)
+		} else if keep_pids.find(packet.PID) {
+			e = writeall(out, packet.RawData)
+		}
+		if e != nil {
+			return e
+		}
+	}
 }
 
 func main() {
@@ -96,43 +168,16 @@ func main() {
 	out := bufio.NewWriter(outf)
 	defer out.Flush()
 
-	reader := libts.NewPacketReader(in)
-	pmt_pids := NewPIDSet()
-	keep_pids := NewPIDSet()
-	patd := libts.NewPATSectionDecoder(func(sec *libts.PATSection) {
-		for _, assoc := range sec.Assotiations {
-			if assoc.ProgramNumber == 0 {
-				keep_pids.add(assoc.PID)
-			} else if assoc.PID != oneseg_pid {
-				keep_pids.add(assoc.PID)
-				pmt_pids.add(assoc.PID)
-			}
-		}
-	})
-	pmtd := libts.NewPMTSectionDecoder(func(sec *libts.PMTSection) {
-		keep_pids.add(sec.PCR_PID)
-		for _, info := range sec.StreamInfo {
-			keep_pids.add(info.ElementaryPID)
-		}
-	})
+	buffered := new(bytes.Buffer)
+	ahead_in := io.TeeReader(in, buffered)
+	keep_pids, e := findKeepPID(ahead_in)
+	if e != nil {
+		log.Fatal(e)
+	}
 
-	for {
-		packet, e := reader.ReadPacket()
-		if e != nil {
-			if e == io.EOF {
-				break
-			}
-			log.Fatal(e)
-		}
-		if packet.PID == libts.PAT_PID {
-			patd.Submit(packet)
-			dump_pat(out, packet, pmt_pids)
-		}
-		if pmt_pids.find(packet.PID) {
-			pmtd.Submit(packet)
-		}
-		if keep_pids.find(packet.PID) {
-			writeall(out, packet.RawData)
-		}
+	full_in := io.MultiReader(buffered, in)
+	e = dump_ts(keep_pids, full_in, out)
+	if e != nil {
+		log.Fatal(e)
 	}
 }
