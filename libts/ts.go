@@ -119,13 +119,8 @@ func (tsp *TSPacket) HasDataBytes() bool {
 
 func (pr *PacketReader) ReadPacket() (*TSPacket, error) {
 	buf := make([]byte, 188)
-	done := 0
-	for done < len(buf) {
-		n, e := pr.reader.Read(buf[done:])
-		if e != nil {
-			return nil, e
-		}
-		done += n
+	if _, e := io.ReadFull(pr.reader, buf); e != nil {
+		return nil, e
 	}
 	return ParsePacket(buf)
 }
@@ -344,11 +339,11 @@ const (
 type PESPacketDecoder struct {
 	state    int
 	buffer   []byte
-	onHeader func(PESPacketHeader)
+	onHeader func(*PESPacketHeader)
 	onData   func([]byte)
 }
 
-func NewPESPacketDecoder(onHeader func(PESPacketHeader), onData func([]byte)) *PESPacketDecoder {
+func NewPESPacketDecoder(onHeader func(*PESPacketHeader), onData func([]byte)) *PESPacketDecoder {
 	return &PESPacketDecoder{pd_not_started, nil, onHeader, onData}
 }
 
@@ -387,7 +382,7 @@ func (d *PESPacketDecoder) Submit(packet *TSPacket) {
 			pts |= uint64(d.buffer[p+4]) >> 1
 			p += 5
 		}
-		header := PESPacketHeader{
+		header := &PESPacketHeader{
 			start_code_prerix,
 			stream_id,
 			packet_len,
