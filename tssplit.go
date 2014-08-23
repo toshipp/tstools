@@ -44,27 +44,31 @@ func findKeepPID(reader io.Reader) (keep_pids PIDSet, err error) {
 	pmt_pids := NewPIDSet()
 	done_pmts := NewPIDSet()
 	keep_pids = NewPIDSet()
+	pmtds := make(map[uint16]*libts.SectionDecoder)
+	new_pmtsd := func(pmt_pid uint16) *libts.SectionDecoder {
+		return libts.NewPMTSectionDecoder(func(sec *libts.PMTSection) {
+			if done_pmts.find(pmt_pid) {
+				return
+			}
+			keep_pids.add(pmt_pid)
+			keep_pids.add(sec.PCR_PID)
+			for _, info := range sec.StreamInfo {
+				keep_pids.add(info.ElementaryPID)
+			}
+			done_pmts.add(pmt_pid)
+		})
+	}
 	patd := libts.NewPATSectionDecoder(func(sec *libts.PATSection) {
 		for _, assoc := range sec.Assotiations {
 			if assoc.ProgramNumber == 0 {
 				keep_pids.add(assoc.PID)
 			} else if assoc.PID != oneseg_pid {
-				keep_pids.add(assoc.PID)
-				pmt_pids.add(assoc.PID)
+				if !pmt_pids.find(assoc.PID) {
+					pmt_pids.add(assoc.PID)
+					pmtds[assoc.PID] = new_pmtsd(assoc.PID)
+				}
 			}
 		}
-	})
-
-	var processing_pid uint16
-	pmtd := libts.NewPMTSectionDecoder(func(sec *libts.PMTSection) {
-		if done_pmts.find(processing_pid) {
-			return
-		}
-		keep_pids.add(sec.PCR_PID)
-		for _, info := range sec.StreamInfo {
-			keep_pids.add(info.ElementaryPID)
-		}
-		done_pmts.add(processing_pid)
 	})
 
 	pr := libts.NewPacketReader(reader)
@@ -77,9 +81,8 @@ func findKeepPID(reader io.Reader) (keep_pids PIDSet, err error) {
 		if packet.PID == libts.PAT_PID {
 			patd.Submit(packet)
 		}
-		if pmt_pids.find(packet.PID) {
-			processing_pid = packet.PID
-			pmtd.Submit(packet)
+		if decoder, ok := pmtds[packet.PID]; ok {
+			decoder.Submit(packet)
 		}
 		if pmt_pids.size() > 0 && pmt_pids.size() == done_pmts.size() {
 			return
