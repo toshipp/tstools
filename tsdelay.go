@@ -1,7 +1,6 @@
 package main
 
 import (
-	"./libts"
 	"bufio"
 	"bytes"
 	"flag"
@@ -9,10 +8,16 @@ import (
 	"io"
 	"log"
 	"os"
+
+	"./libts"
 )
 
 const oneseg_pid = 0x1fc8
 const sequence_start_code = 0x1b3
+
+var (
+	debug bool
+)
 
 func findAVPID(reader io.Reader) (audio_pid uint16, video_pid uint16, err error) {
 	var pmt_pid uint16
@@ -59,26 +64,46 @@ func findAVPTS(audio_pid uint16, video_pid uint16, reader io.Reader) (audio_pts 
 	found_audio_pts := false
 	found_video_pts := false
 
-	apd := libts.NewPESPacketDecoder(func(header *libts.PESPacketHeader) {
-		if found_audio_pts {
-			return
-		}
-		if pts, ok := header.GetPTS(); ok {
-			audio_pts = pts
-			found_audio_pts = true
-		}
-	}, nil)
+	var aph *libts.PESPacketHeader
+	apd := libts.NewPESPacketDecoder(
+		func(header *libts.PESPacketHeader) {
+			if debug {
+				log.Print("found audio pes")
+			}
+			aph = header
+			if pts, ok := header.GetPTS(); ok {
+				if debug {
+					log.Printf("audio pts: %v", pts)
+				}
+				if !found_audio_pts {
+					audio_pts = pts
+					found_audio_pts = true
+				}
+			}
+		},
+		func(data []byte) {
+			if debug {
+				log.Printf("found audio pes body, len: %v, packlen: %v",
+					len(data), aph.PESPacketLength)
+			}
+		})
 
 	var vph *libts.PESPacketHeader
 	var start_code uint32
 	var rest_len int
 	vpd := libts.NewPESPacketDecoder(
 		func(header *libts.PESPacketHeader) {
+			if debug {
+				log.Print("found video pes header")
+			}
 			vph = header
 			start_code = 0
 			rest_len = 4
 		},
 		func(data []byte) {
+			if debug {
+				log.Printf("found video pes body, len: %v", len(data))
+			}
 			if found_video_pts {
 				return
 			}
@@ -95,6 +120,9 @@ func findAVPTS(audio_pid uint16, video_pid uint16, reader io.Reader) (audio_pts 
 			}
 			if start_code == sequence_start_code {
 				if pts, ok := vph.GetPTS(); ok {
+					if debug {
+						log.Printf("video pts: %v", pts)
+					}
 					video_pts = pts
 					found_video_pts = true
 				}
@@ -121,6 +149,7 @@ func findAVPTS(audio_pid uint16, video_pid uint16, reader io.Reader) (audio_pts 
 }
 
 func main() {
+	flag.BoolVar(&debug, "debug", false, "enable debugging")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) > 1 {
@@ -140,6 +169,9 @@ func main() {
 	buffered := new(bytes.Buffer)
 	ahead_in := io.TeeReader(in, buffered)
 	audio_pid, video_pid, e := findAVPID(ahead_in)
+	if debug {
+		log.Printf("audio: %v, video: %v", audio_pid, video_pid)
+	}
 	if e != nil {
 		log.Fatal(e)
 	}
@@ -150,5 +182,8 @@ func main() {
 		log.Fatal(e)
 	}
 	diff := video_pts - audio_pts
+	if diff > 10*90*1000 {
+		log.Fatalf("Too large diff: %v", diff)
+	}
 	fmt.Printf("%f\n", float64(diff)/90/1000)
 }

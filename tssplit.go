@@ -1,13 +1,14 @@
 package main
 
 import (
-	"./libts"
 	"bufio"
 	"bytes"
 	"flag"
 	"io"
 	"log"
 	"os"
+
+	"./libts"
 )
 
 const oneseg_pid = 0x1fc8
@@ -176,6 +177,9 @@ func main() {
 	keep_pids, e := findKeepPID(ahead_in)
 	if e != nil {
 		log.Fatal(e)
+	}
+	for pid, _ := range keep_pids {
+		log.Print(pid)
 	}
 
 	full_in := io.MultiReader(buffered, in)
