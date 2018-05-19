@@ -1,3 +1,5 @@
+all: tssplit tsdelay
+
 tssplit: tssplit.go libts/ts.go
 	go build $<
 
@@ -7,4 +9,4 @@ tsdelay: tsdelay.go libts/ts.go
 fmt:
 	find . -name "*.go" -exec go fmt {} \;
 
-.PHONY: fmt
+.PHONY: fmt all

@@ -92,33 +92,42 @@ func findKeepPID(reader io.Reader) (keep_pids PIDSet, err error) {
 }
 
 func dump_pat(out io.Writer, pat *libts.TSPacket, keep_pids PIDSet) error {
-	data := pat.DataBytes
-	head_pos := uint(data[0]) + 1
-	length_pos := head_pos + 1
-	length := libts.ReadLength(data[length_pos:])
-	assoc_pos := head_pos + 8
-	last_assoc_pos := length_pos + 2 + length - 4
-	in_pos := assoc_pos
-	out_pos := assoc_pos
-	for in_pos < last_assoc_pos {
-		prog_num := uint16(data[in_pos])<<8 + uint16(data[in_pos+1])
-		pid := libts.ReadPID(data[in_pos+2:])
-		if prog_num == 0 || keep_pids.find(pid) {
-			if in_pos != out_pos {
-				copy(data[out_pos:out_pos+4], data[in_pos:in_pos+4])
-			}
-			out_pos += 4
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[debug] pat: %#v", pat)
+			panic(r)
 		}
-		in_pos += 4
-	}
-	crc := libts.Crc32(data[head_pos:out_pos])
-	data[out_pos] = byte(crc >> 24)
-	data[out_pos+1] = byte(crc >> 16)
-	data[out_pos+2] = byte(crc >> 8)
-	data[out_pos+3] = byte(crc)
-	data[length_pos+1] = byte(out_pos + 4 - length_pos - 2)
-	for i := out_pos + 4; i < uint(len(data)); i++ {
-		data[i] = 0xff
+	}()
+	// FIXME? I assume PAT is not divided.
+	if pat.PayloadUnitStart {
+		data := pat.DataBytes
+		head_pos := uint(data[0]) + 1
+		length_pos := head_pos + 1
+		length := libts.ReadLength(data[length_pos:])
+		assoc_pos := head_pos + 8
+		last_assoc_pos := length_pos + 2 + length - 4
+		in_pos := assoc_pos
+		out_pos := assoc_pos
+		for in_pos < last_assoc_pos {
+			prog_num := uint16(data[in_pos])<<8 + uint16(data[in_pos+1])
+			pid := libts.ReadPID(data[in_pos+2:])
+			if prog_num == 0 || keep_pids.find(pid) {
+				if in_pos != out_pos {
+					copy(data[out_pos:out_pos+4], data[in_pos:in_pos+4])
+				}
+				out_pos += 4
+			}
+			in_pos += 4
+		}
+		crc := libts.Crc32(data[head_pos:out_pos])
+		data[out_pos] = byte(crc >> 24)
+		data[out_pos+1] = byte(crc >> 16)
+		data[out_pos+2] = byte(crc >> 8)
+		data[out_pos+3] = byte(crc)
+		data[length_pos+1] = byte(out_pos + 4 - length_pos - 2)
+		for i := out_pos + 4; i < uint(len(data)); i++ {
+			data[i] = 0xff
+		}
 	}
 	return writeall(out, pat.RawData)
 }
@@ -133,9 +142,14 @@ func dump_ts(keep_pids PIDSet, in io.Reader, out io.Writer) error {
 			}
 			return e
 		}
-		if packet.PID == libts.PAT_PID {
+		switch {
+		case packet.TransportError:
+			// FIXME? dump a corrupted packet as is.
+			e = writeall(out, packet.RawData)
+		case packet.ShouldDiscard():
+		case packet.PID == libts.PAT_PID:
 			e = dump_pat(out, packet, keep_pids)
-		} else if keep_pids.find(packet.PID) {
+		case keep_pids.find(packet.PID):
 			e = writeall(out, packet.RawData)
 		}
 		if e != nil {

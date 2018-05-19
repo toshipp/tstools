@@ -53,11 +53,60 @@ func ReadLength(buffer []byte) uint {
 }
 
 type PacketReader struct {
-	reader io.Reader
+	counter uint64
+	reader  io.Reader
 }
 
 func NewPacketReader(reader io.Reader) *PacketReader {
-	return &PacketReader{reader}
+	return &PacketReader{reader: reader}
+}
+
+func (pr *PacketReader) NewTSPacket() *TSPacket {
+	c := pr.counter
+	pr.counter++
+	return &TSPacket{DebugCounter: c}
+
+}
+
+func (pr *PacketReader) ParseAdaptationField(data []byte) (AdaptationField, error) {
+	return data, nil
+}
+
+func (pr *PacketReader) ParsePacket(data []byte) (*TSPacket, error) {
+	packet := pr.NewTSPacket()
+	packet.RawData = data
+	packet.SyncByte = data[0]
+	if packet.SyncByte != 0x47 {
+		return nil, errors.New("Sync byte is not 0x47")
+	}
+	packet.TransportError = data[1]&0x80 != 0
+	packet.PayloadUnitStart = data[1]&0x40 != 0
+	packet.TransportPriority = data[1] & 0x20 >> 5
+	packet.PID = ReadPID(data[1:])
+	packet.TransportScramblingControl = data[3] >> 6
+	packet.AdaptationFieldControl = data[3] & 0x30 >> 4
+	packet.ContinuityCounter = data[3] & 0x0f
+	data_byte := data[4:]
+	if packet.HasAdaptationField() {
+		length := data_byte[0]
+		if 1+int(length) <= len(data_byte) {
+			// an error packet may have invalid length
+			packet.AdaptationField, _ = pr.ParseAdaptationField(data_byte[:1+length])
+			data_byte = data_byte[1+length:]
+		}
+	}
+	if packet.HasDataBytes() {
+		packet.DataBytes = data_byte
+	}
+	return packet, nil
+}
+
+func (pr *PacketReader) ReadPacket() (*TSPacket, error) {
+	buf := make([]byte, 188)
+	if _, e := io.ReadFull(pr.reader, buf); e != nil {
+		return nil, e
+	}
+	return pr.ParsePacket(buf)
 }
 
 // currentry this is a dummy.
@@ -75,36 +124,11 @@ type TSPacket struct {
 	AdaptationField            AdaptationField
 	DataBytes                  []byte
 	RawData                    []byte
+	DebugCounter               uint64
 }
 
-func ParseAdaptationField(data []byte) (AdaptationField, error) {
-	return data, nil
-}
-
-func ParsePacket(data []byte) (*TSPacket, error) {
-	packet := new(TSPacket)
-	packet.SyncByte = data[0]
-	if packet.SyncByte != 0x47 {
-		return nil, errors.New("Sync byte is not 0x47")
-	}
-	packet.TransportError = data[1]&0x80 != 0
-	packet.PayloadUnitStart = data[1]&0x40 != 0
-	packet.TransportPriority = data[1] & 0x20 >> 5
-	packet.PID = ReadPID(data[1:])
-	packet.TransportScramblingControl = data[3] >> 6
-	packet.AdaptationFieldControl = data[3] & 0x30 >> 4
-	packet.ContinuityCounter = data[3] & 0x0f
-	packet.RawData = data
-	data_byte := data[4:]
-	if packet.HasAdaptationField() {
-		length := data_byte[0]
-		packet.AdaptationField, _ = ParseAdaptationField(data_byte[:1+length])
-		data_byte = data_byte[1+length:]
-	}
-	if packet.HasDataBytes() {
-		packet.DataBytes = data_byte
-	}
-	return packet, nil
+func (tsp *TSPacket) ShouldDiscard() bool {
+	return tsp.AdaptationFieldControl == 0
 }
 
 func (tsp *TSPacket) HasAdaptationField() bool {
@@ -115,14 +139,6 @@ func (tsp *TSPacket) HasAdaptationField() bool {
 func (tsp *TSPacket) HasDataBytes() bool {
 	return tsp.AdaptationFieldControl == 1 ||
 		tsp.AdaptationFieldControl == 3
-}
-
-func (pr *PacketReader) ReadPacket() (*TSPacket, error) {
-	buf := make([]byte, 188)
-	if _, e := io.ReadFull(pr.reader, buf); e != nil {
-		return nil, e
-	}
-	return ParsePacket(buf)
 }
 
 type ProgramAssotiation struct {
