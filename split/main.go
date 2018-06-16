@@ -1,4 +1,4 @@
-package main
+package split
 
 import (
 	"bufio"
@@ -8,7 +8,11 @@ import (
 	"log"
 	"os"
 
-	"./libts"
+	"../libts"
+)
+
+var (
+	debug bool
 )
 
 const oneseg_pid = 0x1fc8
@@ -92,12 +96,14 @@ func findKeepPID(reader io.Reader) (keep_pids PIDSet, err error) {
 }
 
 func dump_pat(out io.Writer, pat *libts.TSPacket, keep_pids PIDSet) error {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[debug] pat: %#v", pat)
-			panic(r)
-		}
-	}()
+	if debug {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[debug] pat: %#v", pat)
+				panic(r)
+			}
+		}()
+	}
 	// FIXME? I assume PAT is not divided.
 	if pat.PayloadUnitStart {
 		data := pat.DataBytes
@@ -158,9 +164,11 @@ func dump_ts(keep_pids PIDSet, in io.Reader, out io.Writer) error {
 	}
 }
 
-func main() {
-	flag.Parse()
-	args := flag.Args()
+func Main(args []string) {
+	commandLine := flag.NewFlagSet("delay", flag.ExitOnError)
+	commandLine.BoolVar(&debug, "debug", false, "enable debugging")
+	commandLine.Parse(args)
+	args = commandLine.Args()
 	if len(args) > 2 {
 		log.Fatal("Invalid number of arguments")
 	}
@@ -192,8 +200,10 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
-	for pid, _ := range keep_pids {
-		log.Print(pid)
+	if debug {
+		for pid, _ := range keep_pids {
+			log.Printf("[debug] keep pid: %v", pid)
+		}
 	}
 
 	full_in := io.MultiReader(buffered, in)

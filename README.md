@@ -2,17 +2,16 @@ TSTools
 -------
 tools collection for mpeg2-ts.
 
-Tools
+Usage
 -----
-* tssplit
-```
-usage: tssplit [infile] [outfile]
-```
-  Split ts stream from `infile`.
-  This dumps modified PAT (removed 1seg PMT), PMT, NIT, and packes associating with leaved PMT.
 
-* tsdelay
 ```
-usage: tsdelay [infile]
+tstools split [-debug] [infile] [outfile]
 ```
-  Show difference between video and audio start timestamp in second.
+Split ts stream from `infile`.
+This dumps modified PAT (removed 1seg PMT), PMT, NIT, and packes associating with leaved PMT.
+
+```
+tstools delay [-debug] [infile]
+```
+Show difference between video and audio start timestamp in second.

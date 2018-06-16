@@ -1,4 +1,4 @@
-package main
+package delay
 
 import (
 	"bufio"
@@ -9,7 +9,7 @@ import (
 	"log"
 	"os"
 
-	"./libts"
+	"../libts"
 )
 
 const oneseg_pid = 0x1fc8
@@ -148,10 +148,11 @@ func findAVPTS(audio_pid uint16, video_pid uint16, reader io.Reader) (audio_pts 
 	}
 }
 
-func main() {
-	flag.BoolVar(&debug, "debug", false, "enable debugging")
-	flag.Parse()
-	args := flag.Args()
+func Main(args []string) {
+	commandLine := flag.NewFlagSet("delay", flag.ExitOnError)
+	commandLine.BoolVar(&debug, "debug", false, "enable debugging")
+	commandLine.Parse(args)
+	args = commandLine.Args()
 	if len(args) > 1 {
 		log.Fatal("Invalid number of arguments")
 	}
