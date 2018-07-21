@@ -1,0 +1,7 @@
+[package]
+name = "tstools"
+version = "0.1.0"
+authors = ["toshi_pp <toshiq2@gmail.com>"]
+
+[dependencies]
+failure = "0.1.1"
