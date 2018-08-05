@@ -249,7 +249,7 @@ impl<'a> NormalPESPacketBody<'a> {
                             bail!("too short for PES_private_data");
                         }
                         let pes_private_data = &bytes[..128];
-                        bytes = &bytes[129..];
+                        bytes = &bytes[128..];
                         Some(pes_private_data)
                     }
                     _ => None,
