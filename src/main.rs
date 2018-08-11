@@ -178,8 +178,67 @@ impl<'a> NormalPESPacketBody<'a> {
         let additional_copy_info_flag = bytes[1] >> 2 & 1;
         let pes_crc_flag = bytes[1] >> 1 & 1;
         let pes_extension_flag = bytes[1] & 1;
-        let pes_header_data_length = bytes[2];
-        let mut bytes = &bytes[3..];
+        let pes_header_data_length = usize::from(bytes[2]);
+        let (
+            pts,
+            dts,
+            escr,
+            es_rate,
+            dsm_trick_mode,
+            additional_copy_info,
+            previous_pes_packet_crc,
+            pes_extension,
+        ) = NormalPESPacketBody::parse_optional_fields(
+            &bytes[3..],
+            pts_dts_flags,
+            escr_flag,
+            es_rate_flag,
+            dsm_trick_mode_flag,
+            additional_copy_info_flag,
+            pes_crc_flag,
+            pes_extension_flag,
+        )?;
+        let pes_packet_data_byte = &bytes[3 + pes_header_data_length..];
+        Ok(NormalPESPacketBody {
+            pes_scrambling_control,
+            pes_priority,
+            data_alignment_indicator,
+            copyright,
+            original_or_copy,
+            pts,
+            dts,
+            escr,
+            es_rate,
+            dsm_trick_mode,
+            additional_copy_info,
+            previous_pes_packet_crc,
+            pes_extension,
+            pes_packet_data_byte,
+        })
+    }
+
+    fn parse_optional_fields(
+        mut bytes: &[u8],
+        pts_dts_flags: u8,
+        escr_flag: u8,
+        es_rate_flag: u8,
+        dsm_trick_mode_flag: u8,
+        additional_copy_info_flag: u8,
+        pes_crc_flag: u8,
+        pes_extension_flag: u8,
+    ) -> Result<
+        (
+            Option<u64>,
+            Option<u64>,
+            Option<ESCR>,
+            Option<u32>,
+            Option<DSMTrickMode>,
+            Option<u8>,
+            Option<u16>,
+            Option<PESPacketExtension>,
+        ),
+        Error,
+    > {
         let (pts, dts) = match pts_dts_flags {
             0b10 => {
                 let pts = NormalPESPacketBody::parse_timestamp(bytes)?;
@@ -237,86 +296,10 @@ impl<'a> NormalPESPacketBody<'a> {
             _ => None,
         };
         let pes_extension = match pes_extension_flag {
-            1 => {
-                let pes_private_data_flag = bytes[0] & 0x80 > 0;
-                let pack_header_field_flag = bytes[0] & 0x40 > 0;
-                let program_packet_sequence_counter_flag = bytes[0] & 0x20 > 0;
-                let p_std_buffer_flag = bytes[0] & 0x10 > 0;
-                let pes_extension_flag_2 = bytes[0] & 1 > 0;
-                let pes_private_data = match pes_private_data_flag {
-                    true => {
-                        if bytes.len() < 128 {
-                            bail!("too short for PES_private_data");
-                        }
-                        let pes_private_data = &bytes[..128];
-                        bytes = &bytes[128..];
-                        Some(pes_private_data)
-                    }
-                    _ => None,
-                };
-                let pack_header = if pack_header_field_flag {
-                    let pack_field_length = usize::from(bytes[0]);
-                    let pack_header = &bytes[1..pack_field_length + 1];
-                    bytes = &bytes[pack_field_length + 1..];
-                    Some(pack_header)
-                } else {
-                    None
-                };
-                let (
-                    program_packet_sequence_counter,
-                    mpeg1_mpeg2_identifier,
-                    original_stuff_length,
-                ) = match program_packet_sequence_counter_flag {
-                    true => {
-                        let program_packet_sequence_counter = bytes[0] & 0x7f;
-                        let mpeg1_mpeg2_identifier = bytes[1] & 0x40 >> 6;
-                        let original_stuff_length = bytes[1] & 0x3f;
-                        bytes = &bytes[2..];
-                        (
-                            Some(program_packet_sequence_counter),
-                            Some(mpeg1_mpeg2_identifier),
-                            Some(original_stuff_length),
-                        )
-                    }
-                    _ => (None, None, None),
-                };
-                let (p_std_buffer_scale, p_std_buffer_size) = match p_std_buffer_flag {
-                    true => {
-                        let p_std_buffer_scale = bytes[0] & 0x20 >> 5;
-                        let p_std_buffer_size =
-                            u16::from(bytes[0]) & 0x1f << 8 | u16::from(bytes[1]);
-                        bytes = &bytes[2..];
-                        (Some(p_std_buffer_scale), Some(p_std_buffer_size))
-                    }
-                    _ => (None, None),
-                };
-                if pes_extension_flag_2 {
-                    let pes_extension_field_length = usize::from(bytes[0]) & 0x7f;
-                    bytes = &bytes[pes_extension_field_length + 1..];
-                }
-                Some(PESPacketExtension {
-                    pes_private_data,
-                    pack_header,
-                    program_packet_sequence_counter,
-                    mpeg1_mpeg2_identifier,
-                    original_stuff_length,
-                    p_std_buffer_scale,
-                    p_std_buffer_size,
-                })
-            }
+            1 => Some(NormalPESPacketBody::parse_extension_fields(bytes)?),
             _ => None,
         };
-        // stuffing bytes
-        while bytes[0] == 0xff {
-            bytes = &bytes[1..];
-        }
-        let pes_packet_data_byte = bytes;
-        Ok(NormalPESPacketBody {
-            pes_scrambling_control,
-            pes_priority,
-            data_alignment_indicator,
-            copyright,
-            original_or_copy,
+        Ok((
             pts,
             dts,
             escr,
@@ -325,12 +308,70 @@ impl<'a> NormalPESPacketBody<'a> {
             additional_copy_info,
             previous_pes_packet_crc,
             pes_extension,
-            pes_packet_data_byte,
-        })
+        ))
     }
 
-    fn parse_optional_fields(bytes: &[u8]) -> Result<PESPacketExtension, Error> {
-        unimplemented!();
+    fn parse_extension_fields(mut bytes: &[u8]) -> Result<PESPacketExtension, Error> {
+        let pes_private_data_flag = bytes[0] & 0x80 > 0;
+        let pack_header_field_flag = bytes[0] & 0x40 > 0;
+        let program_packet_sequence_counter_flag = bytes[0] & 0x20 > 0;
+        let p_std_buffer_flag = bytes[0] & 0x10 > 0;
+        let pes_extension_flag_2 = bytes[0] & 1 > 0;
+        let pes_private_data = match pes_private_data_flag {
+            true => {
+                if bytes.len() < 128 {
+                    bail!("too short for PES_private_data");
+                }
+                let pes_private_data = &bytes[..128];
+                bytes = &bytes[128..];
+                Some(pes_private_data)
+            }
+            _ => None,
+        };
+        let pack_header = if pack_header_field_flag {
+            let pack_field_length = usize::from(bytes[0]);
+            let pack_header = &bytes[1..pack_field_length + 1];
+            bytes = &bytes[pack_field_length + 1..];
+            Some(pack_header)
+        } else {
+            None
+        };
+        let (program_packet_sequence_counter, mpeg1_mpeg2_identifier, original_stuff_length) =
+            match program_packet_sequence_counter_flag {
+                true => {
+                    let program_packet_sequence_counter = bytes[0] & 0x7f;
+                    let mpeg1_mpeg2_identifier = bytes[1] & 0x40 >> 6;
+                    let original_stuff_length = bytes[1] & 0x3f;
+                    bytes = &bytes[2..];
+                    (
+                        Some(program_packet_sequence_counter),
+                        Some(mpeg1_mpeg2_identifier),
+                        Some(original_stuff_length),
+                    )
+                }
+                _ => (None, None, None),
+            };
+        let (p_std_buffer_scale, p_std_buffer_size) = match p_std_buffer_flag {
+            true => {
+                let p_std_buffer_scale = bytes[0] & 0x20 >> 5;
+                let p_std_buffer_size = u16::from(bytes[0]) & 0x1f << 8 | u16::from(bytes[1]);
+                bytes = &bytes[2..];
+                (Some(p_std_buffer_scale), Some(p_std_buffer_size))
+            }
+            _ => (None, None),
+        };
+        if pes_extension_flag_2 {
+            let _pes_extension_field_length = usize::from(bytes[0]) & 0x7f;
+        }
+        Ok(PESPacketExtension {
+            pes_private_data,
+            pack_header,
+            program_packet_sequence_counter,
+            mpeg1_mpeg2_identifier,
+            original_stuff_length,
+            p_std_buffer_scale,
+            p_std_buffer_size,
+        })
     }
 
     fn parse_timestamp(bytes: &[u8]) -> Result<u64, Error> {
@@ -357,6 +398,42 @@ impl<'a> NormalPESPacketBody<'a> {
             | u64::from(bytes[4]) >> 3;
         let extension = u16::from(bytes[4]) & 0x3 << 7 | u16::from(bytes[5]) >> 1;
         Ok(ESCR { base, extension })
+    }
+}
+
+const PAT_PID: u8 = 0;
+const CAT_PID: u8 = 1;
+const TSDT_PID: u8 = 2;
+
+struct ProgramAssociation {
+    program_number: u16,
+    PID: u16,
+}
+
+struct ProgramAssociationSection {
+    table_id: u8,
+    section_syntax_indicator: u8,
+    transport_stream_id: u16,
+    version_number: u8,
+    current_next_indicator: u8,
+    section_number: u8,
+    last_section_number: u8,
+    program_association: Vec<ProgramAssociation>,
+    crc32: u32,
+}
+
+impl ProgramAssociationSection {
+    fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection, Error> {
+        let table_id = bytes[0];
+        let section_syntax_indicator = bytes[1] >> 7;
+        let section_length = u16::from(bytes[1]) & 0xf << 8 | u16::from(bytes[2]);
+        let transport_stream_id = u16::from(bytes[3]) << 8 | u16::from(bytes[4]);
+        let version_number = bytes[5] & 0x3e >> 1;
+        let current_next_indicator = bytes[5] & 1;
+        let section_number = bytes[6];
+        let last_section_number = bytes[7];
+
+        unimplemented!();
     }
 }
 
