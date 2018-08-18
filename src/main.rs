@@ -1,7 +1,16 @@
 #[macro_use]
 extern crate failure;
 use failure::Error;
-struct AdaptationField {}
+
+use std::collections::HashMap;
+use std::io;
+use std::io::{Error as StdError, ErrorKind, Read};
+
+#[derive(Debug)]
+struct AdaptationField {
+    adaptation_field_length: u8,
+}
+#[derive(Debug)]
 struct TSPacket<'a> {
     transport_error_indicator: bool,
     payload_unit_start_indicator: bool,
@@ -19,6 +28,7 @@ const SYNC_BYTE: u8 = 0x47;
 const PROGRAM_ASSOCIATION_TABLE: u16 = 0;
 const CONDITIONAL_ACCESS_TABLE: u16 = 1;
 const TRANSPORT_STREAM_DESCRIPTION_TABLE: u16 = 2;
+
 impl<'a> TSPacket<'a> {
     fn parse(bytes: &[u8]) -> Result<TSPacket, Error> {
         if bytes.len() != TS_PACKET_LENGTH {
@@ -71,7 +81,12 @@ impl AdaptationField {
                 bytes.len()
             );
         }
-        Ok((AdaptationField {}, adaptation_field_length + 1))
+        Ok((
+            AdaptationField {
+                adaptation_field_length: adaptation_field_length as u8,
+            },
+            adaptation_field_length + 1,
+        ))
     }
 }
 
@@ -405,11 +420,6 @@ const PAT_PID: u8 = 0;
 const CAT_PID: u8 = 1;
 const TSDT_PID: u8 = 2;
 
-struct ProgramAssociation {
-    program_number: u16,
-    PID: u16,
-}
-
 struct ProgramAssociationSection {
     table_id: u8,
     section_syntax_indicator: u8,
@@ -418,25 +428,85 @@ struct ProgramAssociationSection {
     current_next_indicator: u8,
     section_number: u8,
     last_section_number: u8,
-    program_association: Vec<ProgramAssociation>,
-    crc32: u32,
+    program_association: HashMap<u16, u16>,
+    crc_32: u32,
 }
+
+const BS_sys: usize = 1536;
+const TB_size: usize = 512;
 
 impl ProgramAssociationSection {
     fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection, Error> {
         let table_id = bytes[0];
         let section_syntax_indicator = bytes[1] >> 7;
-        let section_length = u16::from(bytes[1]) & 0xf << 8 | u16::from(bytes[2]);
+        let section_length = usize::from(bytes[1]) & 0xf << 8 | usize::from(bytes[2]);
+        assert!(section_length <= 1021);
         let transport_stream_id = u16::from(bytes[3]) << 8 | u16::from(bytes[4]);
         let version_number = bytes[5] & 0x3e >> 1;
         let current_next_indicator = bytes[5] & 1;
         let section_number = bytes[6];
         let last_section_number = bytes[7];
 
-        unimplemented!();
+        let mut map = &bytes[8..3 + section_length - 4];
+        let mut program_association = HashMap::new();
+        while map.len() > 0 {
+            let program_number = u16::from(map[0]) << 16 | u16::from(map[1]);
+            let pid = u16::from(map[2]) & 0x1f << 8 | u16::from(map[3]);
+            program_association.insert(program_number, pid);
+            map = &map[4..];
+        }
+
+        let bytes = &bytes[3 + section_length - 4..];
+        let crc_32 = u32::from(bytes[0]) << 24
+            | u32::from(bytes[1]) << 16
+            | u32::from(bytes[2]) << 8
+            | u32::from(bytes[3]);
+
+        Ok(ProgramAssociationSection {
+            table_id,
+            section_syntax_indicator,
+            transport_stream_id,
+            version_number,
+            current_next_indicator,
+            section_number,
+            last_section_number,
+            program_association,
+            crc_32,
+        })
+    }
+}
+
+trait Decoder {
+    fn decode(self, bytes: &[u8]) -> Result<(), Error>;
+}
+
+struct TBuffer {}
+
+impl TBuffer {
+    fn new<D: Decoder + 'static>(decoder: D) -> TBuffer {
+        TBuffer {}
+    }
+    fn feed<R: Read>(&self, input: &mut R) -> Result<(), Error> {
+        let mut buf = [0u8; TS_PACKET_LENGTH];
+        input.read_exact(&mut buf)?;
+        let packet = TSPacket::parse(&buf)?;
+        //println!("{:?}", packet);
+        Ok(())
     }
 }
 
 fn main() {
-    println!("Hello, world!");
+    let stdin = io::stdin();
+    let mut handle = stdin.lock();
+    let tb = TBuffer {};
+    loop {
+        if let Err(e) = tb.feed(&mut handle) {
+            if let Some(e) = e.root_cause().downcast_ref::<StdError>() {
+                if e.kind() == ErrorKind::UnexpectedEof {
+                    break;
+                }
+            }
+            println!("{:?}", e);
+        }
+    }
 }
