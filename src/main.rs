@@ -42,7 +42,7 @@ impl<'a> TSPacket<'a> {
         let transport_priority = bytes[1] & 0x20 > 0;
         let pid = (u16::from(bytes[1]) & 0x1f << 8) | u16::from(bytes[2]);
         let transport_scrambling_control = bytes[3] >> 6;
-        let adaptation_field_control = bytes[3] & 0x30 >> 4;
+        let adaptation_field_control = (bytes[3] & 0x30) >> 4;
         let continuity_counter = bytes[3] & 0xf;
         let (adaptation_field, adaptation_field_length) = match adaptation_field_control {
             0b10 | 0b11 => {
@@ -150,9 +150,9 @@ impl<'a> PESPacket<'a> {
             bail!("too short for PES packet {}", bytes.len());
         }
         let packet_start_code_prefix =
-            u32::from(bytes[0]) << 16 | u32::from(bytes[1]) << 8 | u32::from(bytes[2]);
+            (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
         let stream_id = bytes[3];
-        let pes_packet_length = usize::from(bytes[4]) << 8 | usize::from(bytes[5]);
+        let pes_packet_length = (usize::from(bytes[4]) << 8) | usize::from(bytes[5]);
         let body = match stream_id {
             PROGRAM_STREAM_MAP
             | PRIVATE_STREAM_2
@@ -181,17 +181,17 @@ impl<'a> NormalPESPacketBody<'a> {
         if bytes.len() < 3 {
             bail!("too short for pes packet {}", bytes.len());
         }
-        let pes_scrambling_control = bytes[0] >> 6 & 3;
-        let pes_priority = bytes[0] >> 5 & 1;
-        let data_alignment_indicator = bytes[0] >> 4 & 1;
-        let copyright = bytes[0] >> 3 & 1;
-        let original_or_copy = bytes[0] >> 2 & 1;
-        let pts_dts_flags = bytes[1] >> 6 & 3;
-        let escr_flag = bytes[1] >> 5 & 1;
-        let es_rate_flag = bytes[1] >> 4 & 1;
-        let dsm_trick_mode_flag = bytes[1] >> 3 & 1;
-        let additional_copy_info_flag = bytes[1] >> 2 & 1;
-        let pes_crc_flag = bytes[1] >> 1 & 1;
+        let pes_scrambling_control = (bytes[0] >> 6) & 3;
+        let pes_priority = (bytes[0] >> 5) & 1;
+        let data_alignment_indicator = (bytes[0] >> 4) & 1;
+        let copyright = (bytes[0] >> 3) & 1;
+        let original_or_copy = (bytes[0] >> 2) & 1;
+        let pts_dts_flags = (bytes[1] >> 6) & 3;
+        let escr_flag = (bytes[1] >> 5) & 1;
+        let es_rate_flag = (bytes[1] >> 4) & 1;
+        let dsm_trick_mode_flag = (bytes[1] >> 3) & 1;
+        let additional_copy_info_flag = (bytes[1] >> 2) & 1;
+        let pes_crc_flag = (bytes[1] >> 1) & 1;
         let pes_extension_flag = bytes[1] & 1;
         let pes_header_data_length = usize::from(bytes[2]);
         let (
@@ -278,9 +278,9 @@ impl<'a> NormalPESPacketBody<'a> {
         };
         let es_rate = match es_rate_flag {
             1 => {
-                let es_rate = u32::from(bytes[0]) & 0x7f << 15
-                    | u32::from(bytes[1]) << 7
-                    | u32::from(bytes[2]) >> 1;
+                let es_rate = (u32::from(bytes[0] & 0x7f) << 15)
+                    | (u32::from(bytes[1]) << 7)
+                    | (u32::from(bytes[2]) >> 1);
                 bytes = &bytes[3..];
                 Some(es_rate)
             }
@@ -304,7 +304,7 @@ impl<'a> NormalPESPacketBody<'a> {
         };
         let previous_pes_packet_crc = match pes_crc_flag {
             1 => {
-                let previous_pes_packet_crc = u16::from(bytes[0]) << 8 | u16::from(bytes[1]);
+                let previous_pes_packet_crc = (u16::from(bytes[0]) << 8) | u16::from(bytes[1]);
                 bytes = &bytes[2..];
                 Some(previous_pes_packet_crc)
             }
@@ -355,7 +355,7 @@ impl<'a> NormalPESPacketBody<'a> {
             match program_packet_sequence_counter_flag {
                 true => {
                     let program_packet_sequence_counter = bytes[0] & 0x7f;
-                    let mpeg1_mpeg2_identifier = bytes[1] & 0x40 >> 6;
+                    let mpeg1_mpeg2_identifier = (bytes[1] & 0x40) >> 6;
                     let original_stuff_length = bytes[1] & 0x3f;
                     bytes = &bytes[2..];
                     (
@@ -368,8 +368,8 @@ impl<'a> NormalPESPacketBody<'a> {
             };
         let (p_std_buffer_scale, p_std_buffer_size) = match p_std_buffer_flag {
             true => {
-                let p_std_buffer_scale = bytes[0] & 0x20 >> 5;
-                let p_std_buffer_size = u16::from(bytes[0]) & 0x1f << 8 | u16::from(bytes[1]);
+                let p_std_buffer_scale = (bytes[0] & 0x20) >> 5;
+                let p_std_buffer_size = (u16::from(bytes[0] & 0x1f) << 8) | u16::from(bytes[1]);
                 bytes = &bytes[2..];
                 (Some(p_std_buffer_scale), Some(p_std_buffer_size))
             }
@@ -393,33 +393,34 @@ impl<'a> NormalPESPacketBody<'a> {
         if bytes.len() < 5 {
             bail!("too short for timestamp {}", bytes.len());
         }
-        Ok(u64::from(bytes[0]) & 0xe << 29
-            | u64::from(bytes[1]) << 22
-            | u64::from(bytes[2]) & 0xfe << 14
-            | u64::from(bytes[3]) << 7
-            | u64::from(bytes[4]) >> 1)
+        Ok((u64::from(bytes[0] & 0xe) << 29)
+            | (u64::from(bytes[1]) << 22)
+            | (u64::from(bytes[2] & 0xfe) << 14)
+            | (u64::from(bytes[3]) << 7)
+            | (u64::from(bytes[4]) >> 1))
     }
 
     fn parse_escr(bytes: &[u8]) -> Result<ESCR, Error> {
         if bytes.len() < 6 {
             bail!("too short for ESCR");
         }
-        let base = u64::from(bytes[0]) & 0x18 << 27
-            | u64::from(bytes[0]) & 0x3 << 28
-            | u64::from(bytes[1]) << 20
-            | u64::from(bytes[2]) & 0xf8 << 12
-            | u64::from(bytes[2]) & 0x3 << 13
-            | u64::from(bytes[3]) << 5
-            | u64::from(bytes[4]) >> 3;
-        let extension = u16::from(bytes[4]) & 0x3 << 7 | u16::from(bytes[5]) >> 1;
+        let base = (u64::from(bytes[0] & 0x18) << 27)
+            | (u64::from(bytes[0] & 0x3) << 28)
+            | (u64::from(bytes[1]) << 20)
+            | (u64::from(bytes[2] & 0xf8) << 12)
+            | (u64::from(bytes[2] & 0x3) << 13)
+            | (u64::from(bytes[3]) << 5)
+            | (u64::from(bytes[4]) >> 3);
+        let extension = (u16::from(bytes[4] & 0x3) << 7) | (u16::from(bytes[5]) >> 1);
         Ok(ESCR { base, extension })
     }
 }
 
-const PAT_PID: u8 = 0;
-const CAT_PID: u8 = 1;
-const TSDT_PID: u8 = 2;
+const PAT_PID: u16 = 0;
+const CAT_PID: u16 = 1;
+const TSDT_PID: u16 = 2;
 
+#[derive(Debug)]
 struct ProgramAssociationSection {
     table_id: u8,
     section_syntax_indicator: u8,
@@ -438,28 +439,34 @@ const TB_size: usize = 512;
 impl ProgramAssociationSection {
     fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection, Error> {
         let table_id = bytes[0];
+        if table_id != 0 {
+            bail!("invalid table_id: {}", table_id);
+        }
         let section_syntax_indicator = bytes[1] >> 7;
-        let section_length = usize::from(bytes[1]) & 0xf << 8 | usize::from(bytes[2]);
+        let section_length = (usize::from(bytes[1] & 0xf) << 8) | usize::from(bytes[2]);
         assert!(section_length <= 1021);
-        let transport_stream_id = u16::from(bytes[3]) << 8 | u16::from(bytes[4]);
-        let version_number = bytes[5] & 0x3e >> 1;
+        let transport_stream_id = (u16::from(bytes[3]) << 8) | u16::from(bytes[4]);
+        let version_number = (bytes[5] & 0x3e) >> 1;
         let current_next_indicator = bytes[5] & 1;
         let section_number = bytes[6];
         let last_section_number = bytes[7];
 
         let mut map = &bytes[8..3 + section_length - 4];
         let mut program_association = HashMap::new();
+        if map.len() % 4 != 0 {
+            bail!("invalid length");
+        }
         while map.len() > 0 {
-            let program_number = u16::from(map[0]) << 16 | u16::from(map[1]);
-            let pid = u16::from(map[2]) & 0x1f << 8 | u16::from(map[3]);
+            let program_number = (u16::from(map[0]) << 8) | u16::from(map[1]);
+            let pid = (u16::from(map[2] & 0x1f) << 8) | u16::from(map[3]);
             program_association.insert(program_number, pid);
             map = &map[4..];
         }
 
         let bytes = &bytes[3 + section_length - 4..];
-        let crc_32 = u32::from(bytes[0]) << 24
-            | u32::from(bytes[1]) << 16
-            | u32::from(bytes[2]) << 8
+        let crc_32 = (u32::from(bytes[0]) << 24)
+            | (u32::from(bytes[1]) << 16)
+            | (u32::from(bytes[2]) << 8)
             | u32::from(bytes[3]);
 
         Ok(ProgramAssociationSection {
@@ -483,14 +490,37 @@ trait Decoder {
 struct TBuffer {}
 
 impl TBuffer {
-    fn new<D: Decoder + 'static>(decoder: D) -> TBuffer {
+    fn new() -> TBuffer {
         TBuffer {}
     }
-    fn feed<R: Read>(&self, input: &mut R) -> Result<(), Error> {
+
+    fn feed<R: Read>(&mut self, input: &mut R) -> Result<(), Error> {
         let mut buf = [0u8; TS_PACKET_LENGTH];
         input.read_exact(&mut buf)?;
         let packet = TSPacket::parse(&buf)?;
-        //println!("{:?}", packet);
+        //println!("{:?}", packet);Ok(())
+
+        if packet.transport_error_indicator {
+            println!("broken packet");
+            return Ok(());
+        }
+
+        if packet.pid == PAT_PID {
+            if packet.payload_unit_start_indicator {
+                let data_byte = packet.data_byte.unwrap();
+                let pointer_field = usize::from(data_byte[0]);
+                let program_assoc_sec =
+                    match ProgramAssociationSection::parse(&data_byte[1 + pointer_field..]) {
+                        Ok(sec) => sec,
+                        Err(e) => {
+                            println!("raw: {:?}", &buf[..]);
+                            println!("packet: {:?}", packet);
+                            return Err(e);
+                        }
+                    };
+                println!("{:?}", program_assoc_sec);
+            }
+        }
         Ok(())
     }
 }
@@ -498,7 +528,7 @@ impl TBuffer {
 fn main() {
     let stdin = io::stdin();
     let mut handle = stdin.lock();
-    let tb = TBuffer {};
+    let mut tb = TBuffer::new();
     loop {
         if let Err(e) = tb.feed(&mut handle) {
             if let Some(e) = e.root_cause().downcast_ref::<StdError>() {
