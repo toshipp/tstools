@@ -2,9 +2,14 @@
 extern crate failure;
 use failure::Error;
 
+#[macro_use]
+extern crate lazy_static;
+
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error as StdError, ErrorKind, Read};
+
+mod crc32;
 
 #[derive(Debug)]
 struct AdaptationField {
@@ -40,7 +45,7 @@ impl<'a> TSPacket<'a> {
         let transport_error_indicator = bytes[1] & 0x80 > 0;
         let payload_unit_start_indicator = bytes[1] & 0x40 > 0;
         let transport_priority = bytes[1] & 0x20 > 0;
-        let pid = (u16::from(bytes[1]) & 0x1f << 8) | u16::from(bytes[2]);
+        let pid = (u16::from(bytes[1] & 0x1f) << 8) | u16::from(bytes[2]);
         let transport_scrambling_control = bytes[3] >> 6;
         let adaptation_field_control = (bytes[3] & 0x30) >> 4;
         let continuity_counter = bytes[3] & 0xf;
@@ -431,10 +436,29 @@ struct ProgramAssociationSection {
     last_section_number: u8,
     program_association: HashMap<u16, u16>,
     crc_32: u32,
+
+    // calcluated
+    crc_valid: bool,
 }
 
 const BS_sys: usize = 1536;
 const TB_size: usize = 512;
+
+fn make_crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    for i in 0..256 {
+        let mut crc = (i as u32) << 24;
+        for _ in 0..8 {
+            if crc & 0x80000000 != 0 {
+                crc = (crc << 1) ^ 0x04c11db7;
+            } else {
+                crc <<= 1;
+            }
+        }
+        table[i] = crc;
+    }
+    return table;
+}
 
 impl ProgramAssociationSection {
     fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection, Error> {
@@ -451,6 +475,13 @@ impl ProgramAssociationSection {
         let section_number = bytes[6];
         let last_section_number = bytes[7];
 
+        if bytes.len() < 3 + section_length {
+            bail!(
+                "buffer is too small, expected {}, but {}",
+                3 + section_length,
+                bytes.len(),
+            );
+        }
         let mut map = &bytes[8..3 + section_length - 4];
         let mut program_association = HashMap::new();
         if map.len() % 4 != 0 {
@@ -459,15 +490,17 @@ impl ProgramAssociationSection {
         while map.len() > 0 {
             let program_number = (u16::from(map[0]) << 8) | u16::from(map[1]);
             let pid = (u16::from(map[2] & 0x1f) << 8) | u16::from(map[3]);
-            program_association.insert(program_number, pid);
+            program_association.insert(pid, program_number);
             map = &map[4..];
         }
 
-        let bytes = &bytes[3 + section_length - 4..];
-        let crc_32 = (u32::from(bytes[0]) << 24)
-            | (u32::from(bytes[1]) << 16)
-            | (u32::from(bytes[2]) << 8)
-            | u32::from(bytes[3]);
+        let crc = &bytes[3 + section_length - 4..];
+        let crc_32 = (u32::from(crc[0]) << 24)
+            | (u32::from(crc[1]) << 16)
+            | (u32::from(crc[2]) << 8)
+            | u32::from(crc[3]);
+
+        let crc_valid = crc32::crc32(&bytes[..3 + section_length]) == 0;
 
         Ok(ProgramAssociationSection {
             table_id,
@@ -479,6 +512,7 @@ impl ProgramAssociationSection {
             last_section_number,
             program_association,
             crc_32,
+            crc_valid,
         })
     }
 }
