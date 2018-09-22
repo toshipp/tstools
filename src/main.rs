@@ -443,20 +443,14 @@ struct ProgramAssociationSection<'a> {
 const BS_sys: usize = 1536;
 const TB_size: usize = 512;
 
-fn make_crc32_table() -> [u32; 256] {
-    let mut table = [0u32; 256];
-    for i in 0..256 {
-        let mut crc = (i as u32) << 24;
-        for _ in 0..8 {
-            if crc & 0x80000000 != 0 {
-                crc = (crc << 1) ^ 0x04c11db7;
-            } else {
-                crc <<= 1;
-            }
-        }
-        table[i] = crc;
+fn read_u32(bytes: &[u8]) -> Result<u32, Error> {
+    if bytes.len() < 4 {
+        bail!("too short {}", bytes.len());
     }
-    return table;
+    return Ok((u32::from(bytes[0]) << 24)
+        | (u32::from(bytes[1]) << 16)
+        | (u32::from(bytes[2]) << 8)
+        | u32::from(bytes[3]));
 }
 
 impl<'a> ProgramAssociationSection<'a> {
@@ -489,15 +483,12 @@ impl<'a> ProgramAssociationSection<'a> {
         while map.len() > 0 {
             let program_number = (u16::from(map[0]) << 8) | u16::from(map[1]);
             let pid = (u16::from(map[2] & 0x1f) << 8) | u16::from(map[3]);
-            program_association.insert(pid, program_number);
+            program_association.insert(program_number, pid);
             map = &map[4..];
         }
 
         let crc_bytes = &bytes[3 + section_length - 4..];
-        let crc_32 = (u32::from(crc_bytes[0]) << 24)
-            | (u32::from(crc_bytes[1]) << 16)
-            | (u32::from(crc_bytes[2]) << 8)
-            | u32::from(crc_bytes[3]);
+        let crc_32 = read_u32(crc_bytes)?;
 
         Ok(ProgramAssociationSection {
             table_id,
@@ -518,22 +509,197 @@ impl<'a> ProgramAssociationSection<'a> {
     }
 }
 
-trait Decoder {
-    fn decode(self, bytes: &[u8]) -> Result<(), Error>;
+#[derive(Debug)]
+enum Descriptor {
+    Descriptor(u8),
 }
 
-struct TBuffer {}
+impl Descriptor {
+    fn parse(bytes: &[u8]) -> Result<(Descriptor, usize), Error> {
+        if bytes.len() < 2 {
+            bail!("too short bytes {}", bytes.len());
+        }
+        let descriptor_tag = bytes[0];
+        let descriptor_length = usize::from(bytes[1]);
+        return Ok((
+            Descriptor::Descriptor(descriptor_tag),
+            descriptor_length + 2,
+        ));
+    }
+}
 
-impl TBuffer {
-    fn new() -> TBuffer {
-        TBuffer {}
+#[derive(Debug)]
+struct TSProgramInfo {
+    stream_type: u8,
+    elementary_pid: u16,
+    descriptors: Vec<Descriptor>,
+}
+
+impl TSProgramInfo {
+    fn parse(bytes: &[u8]) -> Result<(TSProgramInfo, usize), Error> {
+        if bytes.len() < 5 {
+            bail!("too short {}", bytes.len());
+        }
+        let stream_type = bytes[0];
+        let elementary_pid = (u16::from(bytes[1] & 0x1f) << 8) | u16::from(bytes[2]);
+        let es_info_length = (usize::from(bytes[3] & 0xf) << 8) | usize::from(bytes[4]);
+        if bytes.len() < 5 + es_info_length {
+            bail!("too short {}", bytes.len());
+        }
+        let mut descriptors = vec![];
+        let mut bytes = &bytes[5..5 + es_info_length];
+        while bytes.len() > 0 {
+            let (descriptor, n) = Descriptor::parse(bytes)?;
+            descriptors.push(descriptor);
+            bytes = &bytes[n..];
+        }
+        Ok((
+            TSProgramInfo {
+                stream_type,
+                elementary_pid,
+                descriptors,
+            },
+            5 + es_info_length,
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct TSProgramMapSection {
+    table_id: u8,
+    section_syntax_indicator: u8,
+    program_number: u16,
+    version_number: u8,
+    current_next_indicator: u8,
+    section_number: u8,
+    last_section_number: u8,
+    pcr_pid: u16,
+    descriptors: Vec<Descriptor>,
+    program_info: Vec<TSProgramInfo>,
+    crc_32: u32,
+}
+
+impl TSProgramMapSection {
+    fn parse(bytes: &[u8]) -> Result<TSProgramMapSection, Error> {
+        let table_id = bytes[0];
+        if table_id != 0x02 {
+            bail!("table_id should 0x02, {}", table_id);
+        }
+        let section_syntax_indicator = bytes[1] >> 7;
+        let section_length = (usize::from(bytes[1] & 0xf) << 8) | usize::from(bytes[2]);
+        let program_number = (u16::from(bytes[3]) << 8) | u16::from(bytes[4]);
+        let version_number = (bytes[5] & 0x3e) >> 1;
+        let current_next_indicator = bytes[5] & 0x1;
+        let section_number = bytes[6];
+        let last_section_number = bytes[7];
+        let pcr_pid = (u16::from(bytes[8] & 0x1f) << 8) | u16::from(bytes[9]);
+        let program_info_length = (usize::from(bytes[10] & 0xf) << 8) | usize::from(bytes[11]);
+
+        if bytes.len() < 12 + program_info_length {
+            bail!(
+                "too short bytes {}, expect {}",
+                bytes.len(),
+                12 + program_info_length
+            );
+        }
+        let mut descriptors = vec![];
+        {
+            let mut bytes = &bytes[12..12 + program_info_length];
+            while bytes.len() > 0 {
+                let (descriptor, n) = Descriptor::parse(bytes)?;
+                descriptors.push(descriptor);
+                bytes = &bytes[n..];
+            }
+        }
+        let mut program_info = vec![];
+        {
+            let mut bytes = &bytes[12 + program_info_length..3 + section_length - 4];
+            while bytes.len() > 0 {
+                let (info, n) = TSProgramInfo::parse(bytes)?;
+                program_info.push(info);
+                bytes = &bytes[n..];
+            }
+        }
+        let crc_32 = read_u32(&bytes[3 + section_length - 4..])?;
+        return Ok(TSProgramMapSection {
+            table_id,
+            section_syntax_indicator,
+            program_number,
+            version_number,
+            current_next_indicator,
+            section_number,
+            last_section_number,
+            pcr_pid,
+            descriptors,
+            program_info,
+            crc_32,
+        });
+    }
+}
+
+#[derive(Debug)]
+struct ProgramMapProcessor {
+    pid: u16,
+    started: bool,
+    counter: u8,
+    buffer: Vec<u8>,
+}
+
+const MAX_SECTION_LENGTH: usize = 0x3FD;
+
+impl ProgramMapProcessor {
+    fn new(pid: u16) -> ProgramMapProcessor {
+        return ProgramMapProcessor {
+            pid,
+            started: false,
+            counter: 0,
+            buffer: Vec::with_capacity(MAX_SECTION_LENGTH),
+        };
+    }
+    fn feed(&mut self, packet: &TSPacket) -> Result<Option<TSProgramMapSection>, Error> {
+        let mut ret = None;
+        if packet.payload_unit_start_indicator {
+            if self.started {
+                ret = Some(TSProgramMapSection::parse(self.buffer.as_slice())?);
+            }
+            self.started = true;
+            self.counter = packet.continuity_counter;
+            let bytes = packet.data_byte.unwrap();
+            let pointer_field = usize::from(bytes[0]);
+            self.buffer.truncate(0);
+            self.buffer.extend_from_slice(&bytes[1 + pointer_field..]);
+        } else {
+            if self.started {
+                if self.counter == packet.continuity_counter {
+                    // duplicate
+                } else if ((self.counter + 1) % 16) == packet.continuity_counter {
+                    self.counter = packet.continuity_counter;
+                    self.buffer.extend_from_slice(packet.data_byte.unwrap());
+                } else {
+                    // discontinu, reset
+                    self.started = false;
+                }
+            }
+        }
+        return Ok(ret);
+    }
+}
+
+struct TSPacketProcessor {
+    program_map_processors: HashMap<u16, ProgramMapProcessor>,
+}
+
+impl TSPacketProcessor {
+    fn new() -> TSPacketProcessor {
+        TSPacketProcessor {
+            program_map_processors: HashMap::new(),
+        }
     }
 
     fn feed<R: Read>(&mut self, input: &mut R) -> Result<(), Error> {
         let mut buf = [0u8; TS_PACKET_LENGTH];
         input.read_exact(&mut buf)?;
         let packet = TSPacket::parse(&buf)?;
-        //println!("{:?}", packet);Ok(())
 
         if packet.transport_error_indicator {
             println!("broken packet");
@@ -553,7 +719,25 @@ impl TBuffer {
                             return Err(e);
                         }
                     };
-                println!("{:?}", program_assoc_sec);
+                for (program_number, pid) in program_assoc_sec.program_association {
+                    if program_number != 0 {
+                        // not network pid
+                        self.program_map_processors
+                            .entry(pid)
+                            .or_insert(ProgramMapProcessor::new(pid));
+                    }
+                }
+            }
+        }
+        if let Some(pmp) = self.program_map_processors.get_mut(&packet.pid) {
+            match pmp.feed(&packet) {
+                Ok(Some(pms)) => println!("program map section: {:?}", pms),
+                Err(e) => {
+                    println!("packet: {:?}", packet);
+                    println!("pmp: {:?}", pmp);
+                    return Err(e);
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -563,9 +747,9 @@ impl TBuffer {
 fn main() {
     let stdin = io::stdin();
     let mut handle = stdin.lock();
-    let mut tb = TBuffer::new();
+    let mut processor = TSPacketProcessor::new();
     loop {
-        if let Err(e) = tb.feed(&mut handle) {
+        if let Err(e) = processor.feed(&mut handle) {
             if let Some(e) = e.root_cause().downcast_ref::<StdError>() {
                 if e.kind() == ErrorKind::UnexpectedEof {
                     break;
