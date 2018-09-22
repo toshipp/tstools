@@ -426,7 +426,7 @@ const CAT_PID: u16 = 1;
 const TSDT_PID: u16 = 2;
 
 #[derive(Debug)]
-struct ProgramAssociationSection {
+struct ProgramAssociationSection<'a> {
     table_id: u8,
     section_syntax_indicator: u8,
     transport_stream_id: u16,
@@ -437,8 +437,7 @@ struct ProgramAssociationSection {
     program_association: HashMap<u16, u16>,
     crc_32: u32,
 
-    // calcluated
-    crc_valid: bool,
+    _raw_bytes: &'a [u8],
 }
 
 const BS_sys: usize = 1536;
@@ -460,7 +459,7 @@ fn make_crc32_table() -> [u32; 256] {
     return table;
 }
 
-impl ProgramAssociationSection {
+impl<'a> ProgramAssociationSection<'a> {
     fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection, Error> {
         let table_id = bytes[0];
         if table_id != 0 {
@@ -494,13 +493,11 @@ impl ProgramAssociationSection {
             map = &map[4..];
         }
 
-        let crc = &bytes[3 + section_length - 4..];
-        let crc_32 = (u32::from(crc[0]) << 24)
-            | (u32::from(crc[1]) << 16)
-            | (u32::from(crc[2]) << 8)
-            | u32::from(crc[3]);
-
-        let crc_valid = crc32::crc32(&bytes[..3 + section_length]) == 0;
+        let crc_bytes = &bytes[3 + section_length - 4..];
+        let crc_32 = (u32::from(crc_bytes[0]) << 24)
+            | (u32::from(crc_bytes[1]) << 16)
+            | (u32::from(crc_bytes[2]) << 8)
+            | u32::from(crc_bytes[3]);
 
         Ok(ProgramAssociationSection {
             table_id,
@@ -512,8 +509,12 @@ impl ProgramAssociationSection {
             last_section_number,
             program_association,
             crc_32,
-            crc_valid,
+            _raw_bytes: &bytes[..3 + section_length],
         })
+    }
+
+    fn calculate_crc32(&self) -> u32 {
+        return crc32::crc32(self._raw_bytes);
     }
 }
 
