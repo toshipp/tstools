@@ -69,7 +69,11 @@ impl<'a> PESPacket<'a> {
         let packet_start_code_prefix =
             (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
         let stream_id = bytes[3];
-        let pes_packet_length = (usize::from(bytes[4]) << 8) | usize::from(bytes[5]);
+        let mut pes_packet_length = (usize::from(bytes[4]) << 8) | usize::from(bytes[5]);
+        // TODO
+        if pes_packet_length == 0 {
+            pes_packet_length = bytes.len() - 6;
+        }
         check_len!(bytes.len(), 6 + pes_packet_length);
         let body = match stream_id {
             PROGRAM_STREAM_MAP

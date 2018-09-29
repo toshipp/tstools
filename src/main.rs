@@ -134,9 +134,10 @@ impl TSPacketProcessor {
                 Ok(Some(pms)) => {
                     debug!("program map section: {:?}", pms);
                     for si in pms.stream_info.iter() {
+                        // TODO
                         self.pes_processors
                             .entry(si.elementary_pid)
-                            .or_insert(PESProcessor::new(si.elementary_pid));
+                            .or_insert(PESProcessor::new(si.stream_type, si.elementary_pid));
                     }
                 }
                 Err(e) => {
@@ -153,7 +154,8 @@ impl TSPacketProcessor {
                 Ok(())
             }) {
                 Err(e) => {
-                    debug!("error: {:?}", e);
+                    info!("error: {:?}", e);
+                    info!("pesp {:?}", pesp);
                     return Err(e);
                 }
                 _ => {}
@@ -165,6 +167,7 @@ impl TSPacketProcessor {
 
 #[derive(Debug)]
 struct PESProcessor {
+    stream_type: u8,
     pid: u16,
     started: bool,
     counter: u8,
@@ -172,8 +175,9 @@ struct PESProcessor {
 }
 
 impl PESProcessor {
-    fn new(pid: u16) -> PESProcessor {
+    fn new(stream_type: u8, pid: u16) -> PESProcessor {
         return PESProcessor {
+            stream_type,
             pid,
             started: false,
             counter: 0,
@@ -190,17 +194,23 @@ impl PESProcessor {
             if self.started {
                 ret = pes::PESPacket::parse(self.buffer.as_slice()).and_then(f);
             }
+            let bytes = packet
+                .data_byte
+                .ok_or(format_err!("no data bytes packet"))?;
             self.started = true;
             self.counter = packet.continuity_counter;
             self.buffer.truncate(0);
-            self.buffer.extend_from_slice(packet.data_byte.unwrap());
+            self.buffer.extend_from_slice(bytes);
         } else {
             if self.started {
                 if self.counter == packet.continuity_counter {
                     // duplicate
                 } else if ((self.counter + 1) % 16) == packet.continuity_counter {
+                    let bytes = packet
+                        .data_byte
+                        .ok_or(format_err!("no data bytes packet"))?;
                     self.counter = packet.continuity_counter;
-                    self.buffer.extend_from_slice(packet.data_byte.unwrap());
+                    self.buffer.extend_from_slice(bytes);
                 } else {
                     // discontinue, reset
                     self.started = false;
