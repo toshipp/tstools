@@ -6,3 +6,11 @@ authors = ["toshi_pp <toshiq2@gmail.com>"]
 [dependencies]
 failure = "0.1.1"
 lazy_static = "1.1.0"
+log = "0.4"
+env_logger = "0.5.13"
+macros = { path = "macros" }
+
+[workspace]
+members = [
+       "macros"
+]
