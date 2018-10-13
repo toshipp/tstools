@@ -16,7 +16,8 @@ pub struct TSPacket<'a> {
     pub transport_scrambling_control: u8,
     pub continuity_counter: u8,
     pub adaptation_field: Option<AdaptationField>,
-    pub data_byte: Option<&'a [u8]>,
+    pub data_bytes: Option<&'a [u8]>,
+    raw_bytes: &'a [u8],
 }
 impl<'a> TSPacket<'a> {
     pub fn parse(bytes: &[u8]) -> Result<TSPacket, Error> {
@@ -40,7 +41,7 @@ impl<'a> TSPacket<'a> {
             }
             _ => (None, 0),
         };
-        let data_byte = match adaptation_field_control {
+        let data_bytes = match adaptation_field_control {
             0b01 | 0b11 => Some(&bytes[4 + adaptation_field_length..]),
             _ => None,
         };
@@ -52,7 +53,8 @@ impl<'a> TSPacket<'a> {
             transport_scrambling_control,
             continuity_counter,
             adaptation_field,
-            data_byte,
+            data_bytes,
+            raw_bytes: bytes,
         })
     }
 }
