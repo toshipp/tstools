@@ -83,16 +83,7 @@ impl TSPacketProcessor {
         }
     }
 
-    fn feed<R: Read>(&mut self, input: &mut R) -> Result<(), Error> {
-        let mut buf = [0u8; ts::TS_PACKET_LENGTH];
-        input.read_exact(&mut buf)?;
-        let packet = ts::TSPacket::parse(&buf)?;
-
-        if packet.transport_error_indicator {
-            debug!("broken packet");
-            return Ok(());
-        }
-
+    fn process_psi(&mut self, packet: &ts::TSPacket) -> Result<(), Error> {
         let mut stream_types = HashSet::new();
         let mut psi_procs = Vec::new();
         let mut pes_procs = Vec::new();
@@ -118,13 +109,17 @@ impl TSPacketProcessor {
                         let pms = psi::TSProgramMapSection::parse(bytes)?;
                         debug!("program map section: {:?}", pms);
                         for si in pms.stream_info.iter() {
-                            // TODO
-                            debug!("stream type: {}", si.stream_type);
                             stream_types.insert(si.stream_type);
-                            pes_procs.push((
-                                si.elementary_pid,
-                                PESProcessor::new(si.stream_type, si.elementary_pid),
-                            ));
+                            match si.stream_type {
+                                ts::MPEG2_VIDEO_STREAM
+                                | ts::PES_PRIVATE_STREAM
+                                | ts::ADTS_AUDIO_STREAM
+                                | ts::H264_VIDEO_STREAM => pes_procs.push((
+                                    si.elementary_pid,
+                                    PESProcessor::new(si.stream_type, si.elementary_pid),
+                                )),
+                                _ => {}
+                            };
                         }
                         return Ok(());
                     }
@@ -135,6 +130,7 @@ impl TSPacketProcessor {
             }) {
                 Err(e) => {
                     info!("psi process error: {:?}", e);
+                    return Err(e);
                 }
                 _ => {}
             }
@@ -144,13 +140,21 @@ impl TSPacketProcessor {
             self.psi_processors.entry(pid).or_insert(proc);
         }
         for (pid, proc) in pes_procs.into_iter() {
-            self.pes_processors .entry(pid).or_insert(proc);
+            self.pes_processors.entry(pid).or_insert(proc);
         }
         self.stream_types.extend(stream_types.iter());
 
+        Ok(())
+    }
+
+    fn process_pes(&mut self, packet: &ts::TSPacket) -> Result<(), Error> {
         if let Some(proc) = self.pes_processors.get_mut(&packet.pid) {
             match proc.feed(&packet, |pes| {
-                debug!("pes {:?}", pes);
+                if pes.stream_id == 0b10111101 {
+                    info!("pes private stream1 {:?}", pes);
+                } else {
+                    debug!("pes {:?}", pes);
+                }
                 Ok(())
             }) {
                 Err(e) => {
@@ -160,8 +164,23 @@ impl TSPacketProcessor {
                     return Err(e);
                 }
                 _ => {}
-            };
+            }
         }
+        Ok(())
+    }
+    fn feed<R: Read>(&mut self, input: &mut R) -> Result<(), Error> {
+        let mut buf = [0u8; ts::TS_PACKET_LENGTH];
+        input.read_exact(&mut buf)?;
+        let packet = ts::TSPacket::parse(&buf)?;
+
+        if packet.transport_error_indicator {
+            debug!("broken packet");
+            return Ok(());
+        }
+
+        self.process_psi(&packet)?;
+        self.process_pes(&packet)?;
+
         Ok(())
     }
 }
@@ -170,7 +189,7 @@ impl TSPacketProcessor {
 struct PESProcessor {
     stream_type: u8,
     pid: u16,
-    buffer: psi::Buffer,
+    buffer: pes::Buffer,
 }
 
 impl PESProcessor {
@@ -178,21 +197,22 @@ impl PESProcessor {
         return PESProcessor {
             stream_type,
             pid,
-            buffer: psi::Buffer::new(),
+            buffer: pes::Buffer::new(),
         };
     }
-    fn feed<F: Fn(pes::PESPacket) -> Result<(), Error>>(
+    fn feed<F: FnMut(pes::PESPacket) -> Result<(), Error>>(
         &mut self,
         packet: &ts::TSPacket,
-        f: F,
+        mut f: F,
     ) -> Result<(), Error> {
-        match self.buffer.feed(packet)?.map(|bytes| {
-            let pes = pes::PESPacket::parse(bytes)?;
-            f(pes)
-        }) {
-            Some(Err(e)) => Err(e),
-            _ => Ok(()),
-        }
+        self.buffer
+            .feed(packet, |bytes| match pes::PESPacket::parse(bytes) {
+                Ok(pes) => f(pes),
+                Err(e) => {
+                    info!("pes parse error raw bytes : {:?}", bytes);
+                    Err(e)
+                }
+            })
     }
 }
 

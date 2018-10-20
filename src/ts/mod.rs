@@ -7,6 +7,7 @@ const SYNC_BYTE: u8 = 0x47;
 pub struct AdaptationField {
     adaptation_field_length: u8,
 }
+
 #[derive(Debug)]
 pub struct TSPacket<'a> {
     pub transport_error_indicator: bool,
@@ -19,6 +20,7 @@ pub struct TSPacket<'a> {
     pub data_bytes: Option<&'a [u8]>,
     raw_bytes: &'a [u8],
 }
+
 impl<'a> TSPacket<'a> {
     pub fn parse(bytes: &[u8]) -> Result<TSPacket, Error> {
         if bytes.len() != TS_PACKET_LENGTH {
@@ -80,3 +82,8 @@ impl AdaptationField {
         ))
     }
 }
+
+pub const MPEG2_VIDEO_STREAM: u8 = 0x2;
+pub const PES_PRIVATE_STREAM: u8 = 0x6;
+pub const ADTS_AUDIO_STREAM: u8 = 0xf;
+pub const H264_VIDEO_STREAM: u8 = 0x1b;

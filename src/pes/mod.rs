@@ -1,5 +1,8 @@
 use failure::Error;
 
+mod buffer;
+pub use self::buffer::*;
+
 const PROGRAM_STREAM_MAP: u8 = 0b10111100;
 const PRIVATE_STREAM_2: u8 = 0b10111111;
 const ECM: u8 = 0b11110000;
@@ -25,6 +28,7 @@ pub struct PESPacket<'a> {
     pub stream_id: u8,
     pub body: PESPacketBody<'a>,
 }
+
 #[derive(Debug)]
 struct PESPacketExtension<'a> {
     pes_private_data: Option<&'a [u8]>,
@@ -264,11 +268,11 @@ impl<'a> NormalPESPacketBody<'a> {
         let pes_extension_flag_2 = bytes[0] & 1 > 0;
         let pes_private_data = match pes_private_data_flag {
             true => {
-                if bytes.len() < 128 {
+                if bytes.len() < 16 {
                     bail!("too short for PES_private_data");
                 }
-                let pes_private_data = &bytes[..128];
-                bytes = &bytes[128..];
+                let pes_private_data = &bytes[..16];
+                bytes = &bytes[16..];
                 Some(pes_private_data)
             }
             _ => None,
