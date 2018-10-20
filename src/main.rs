@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 use std::io::{Error as StdError, ErrorKind, Read};
-use std::mem;
 
 #[macro_use]
 extern crate macros;
@@ -94,77 +93,69 @@ impl TSPacketProcessor {
             return Ok(());
         }
 
-        let stream_types = &mut mem::replace(&mut self.stream_types, HashSet::new());
+        let mut stream_types = HashSet::new();
+        let mut psi_procs = Vec::new();
+        let mut pes_procs = Vec::new();
 
-        let ret = self.psi_processors.get_mut(&packet.pid).map(|processor| {
-            processor.feed(&packet, |bytes| {
+        if let Some(proc) = self.psi_processors.get_mut(&packet.pid) {
+            match proc.feed(&packet, |bytes| {
                 let table_id = bytes[0];
                 match table_id {
                     psi::PROGRAM_ASSOCIATION_SECTION => {
                         let pas = psi::ProgramAssociationSection::parse(bytes)?;
-                        let mut procs = HashMap::new();
                         for (program_number, pid) in pas.program_association {
                             if program_number != 0 {
                                 // not network pid
-                                procs.insert(
+                                psi_procs.push((
                                     pid,
                                     PSIProcessor::new(pid, psi::TS_PROGRAM_MAP_SECTION),
-                                );
+                                ));
                             }
                         }
-                        return Ok((Some(procs), None));
+                        return Ok(());
                     }
                     psi::TS_PROGRAM_MAP_SECTION => {
                         let pms = psi::TSProgramMapSection::parse(bytes)?;
-                        let mut procs = HashMap::new();
                         debug!("program map section: {:?}", pms);
                         for si in pms.stream_info.iter() {
                             // TODO
                             debug!("stream type: {}", si.stream_type);
                             stream_types.insert(si.stream_type);
-                            procs.insert(
+                            pes_procs.push((
                                 si.elementary_pid,
                                 PESProcessor::new(si.stream_type, si.elementary_pid),
-                            );
+                            ));
                         }
-                        return Ok((None, Some(procs)));
+                        return Ok(());
                     }
                     _ => {
                         unreachable!("bug");
                     }
                 }
-            })
-        });
-        match ret {
-            Some(Ok(Some((psi_procs, pes_procs)))) => {
-                if let Some(mut psi_procs) = psi_procs {
-                    for (pid, proc) in psi_procs.drain() {
-                        self.psi_processors.entry(pid).or_insert(proc);
-                    }
+            }) {
+                Err(e) => {
+                    info!("psi process error: {:?}", e);
                 }
-
-                if let Some(mut pes_procs) = pes_procs {
-                    for (pid, proc) in pes_procs.drain() {
-                        self.pes_processors.entry(pid).or_insert(proc);
-                    }
-                }
+                _ => {}
             }
-            Some(Err(e)) => {
-                info!("psi process error: {:?}", e);
-            }
-            _ => {}
-        };
+        }
 
-        mem::swap(&mut self.stream_types, stream_types);
+        for (pid, proc) in psi_procs.into_iter() {
+            self.psi_processors.entry(pid).or_insert(proc);
+        }
+        for (pid, proc) in pes_procs.into_iter() {
+            self.pes_processors .entry(pid).or_insert(proc);
+        }
+        self.stream_types.extend(stream_types.iter());
 
-        if let Some(pesp) = self.pes_processors.get_mut(&packet.pid) {
-            match pesp.feed(&packet, |pes| {
+        if let Some(proc) = self.pes_processors.get_mut(&packet.pid) {
+            match proc.feed(&packet, |pes| {
                 debug!("pes {:?}", pes);
                 Ok(())
             }) {
                 Err(e) => {
                     info!("error: {:?}", e);
-                    info!("pesp {:?}", pesp);
+                    info!("pesp {:?}", proc);
                     info!("packet {:?}", packet);
                     return Err(e);
                 }
