@@ -70,6 +70,8 @@ struct TSPacketProcessor {
     psi_processors: HashMap<u16, PSIProcessor>,
     pes_processors: HashMap<u16, PESProcessor>,
     stream_types: HashSet<u8>,
+    descriptors: HashSet<u8>,
+    pids: HashSet<u16>,
 }
 
 impl TSPacketProcessor {
@@ -80,6 +82,8 @@ impl TSPacketProcessor {
             psi_processors: psip,
             pes_processors: HashMap::new(),
             stream_types: HashSet::new(),
+            descriptors: HashSet::new(),
+            pids: HashSet::new(),
         }
     }
 
@@ -87,6 +91,7 @@ impl TSPacketProcessor {
         let mut stream_types = HashSet::new();
         let mut psi_procs = Vec::new();
         let mut pes_procs = Vec::new();
+        let mut descriptors = Vec::new();
 
         if let Some(proc) = self.psi_processors.get_mut(&packet.pid) {
             match proc.feed(&packet, |bytes| {
@@ -108,6 +113,10 @@ impl TSPacketProcessor {
                     psi::TS_PROGRAM_MAP_SECTION => {
                         let pms = psi::TSProgramMapSection::parse(bytes)?;
                         debug!("program map section: {:?}", pms);
+                        for desc in pms.descriptors.iter() {
+                            let psi::Descriptor::Descriptor(tag) = desc;
+                            descriptors.push(*tag);
+                        }
                         for si in pms.stream_info.iter() {
                             stream_types.insert(si.stream_type);
                             match si.stream_type {
@@ -143,6 +152,7 @@ impl TSPacketProcessor {
             self.pes_processors.entry(pid).or_insert(proc);
         }
         self.stream_types.extend(stream_types.iter());
+        self.descriptors.extend(descriptors.iter());
 
         Ok(())
     }
@@ -180,6 +190,8 @@ impl TSPacketProcessor {
 
         self.process_psi(&packet)?;
         self.process_pes(&packet)?;
+
+        self.pids.insert(packet.pid);
 
         Ok(())
     }
@@ -233,4 +245,13 @@ fn main() {
         }
     }
     info!("types: {:?}", processor.stream_types);
+    info!("descriptors: {:?}", processor.descriptors);
+    let pids = processor
+        .pes_processors
+        .keys()
+        .chain(processor.psi_processors.keys())
+        .map(|x| *x)
+        .collect::<HashSet<_>>();
+    info!("proceeded {:?}", pids);
+    info!("pids: {:?}", processor.pids.difference(&pids));
 }
