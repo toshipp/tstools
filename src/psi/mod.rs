@@ -11,6 +11,7 @@ mod descriptor;
 pub use self::descriptor::Descriptor;
 
 mod eit;
+pub use self::eit::*;
 
 pub const PROGRAM_ASSOCIATION_SECTION: u8 = 0;
 pub const CONDITIONAL_ACCESS_SECTION: u8 = 1;

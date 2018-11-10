@@ -10,13 +10,29 @@ use util;
 use psi::Descriptor;
 
 #[derive(Debug)]
-pub struct Event {
+pub struct Event<'a> {
     pub event_id: u16,
     pub start_time: Option<DateTime<FixedOffset>>,
     pub duration: Option<Duration>,
     pub running_status: u8,
     pub free_ca_mode: bool,
-    pub descriptors: Vec<Descriptor>,
+
+    //0x4d short event
+    //0x4e exntended event desc
+    //0x50 component desc
+    //0x54 content desc
+    //0xc4 audit component desc
+    //0xc7 data contents desc.
+    //0xd6 event group desc
+    pub descriptors: Vec<Descriptor<'a>>,
+}
+
+#[derive(Debug)]
+pub enum ScheduleType {
+    SelfNow,
+    OtherNow,
+    SelfFuture,
+    OtherFuture,
 }
 
 #[derive(Debug)]
@@ -32,13 +48,14 @@ pub struct EventInformationSection<'a> {
     pub original_network_id: u16,
     pub segment_last_section_number: u8,
     pub last_table_id: u8,
-    pub events: Vec<Event>,
+    pub events: Vec<Event<'a>>,
     pub crc_32: u32,
 
     _raw_bytes: &'a [u8],
+    pub schedule_type: ScheduleType,
 }
 
-impl Event {
+impl<'a> Event<'a> {
     fn parse(bytes: &[u8]) -> Result<(Event, usize), Error> {
         check_len!(bytes.len(), 12);
         let event_id = (u16::from(bytes[0]) << 8) | u16::from(bytes[1]);
@@ -130,7 +147,7 @@ impl Event {
 }
 
 impl<'a> EventInformationSection<'a> {
-    fn parse(bytes: &[u8]) -> Result<EventInformationSection, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<EventInformationSection, Error> {
         let table_id = bytes[0];
         let section_syntax_indicator = bytes[1] >> 7;
         let section_length = (usize::from(bytes[1] & 0xf) << 8) | usize::from(bytes[2]);
@@ -169,6 +186,19 @@ impl<'a> EventInformationSection<'a> {
             events,
             crc_32,
             _raw_bytes: bytes,
+            schedule_type: Self::schedule_type(table_id),
         })
+    }
+
+    fn schedule_type(table_id: u8) -> ScheduleType {
+        match table_id {
+            0x4e => ScheduleType::SelfNow,
+            0x4f => ScheduleType::OtherNow,
+            n if 0x50 <= n && n <= 0x5f => ScheduleType::SelfFuture,
+            n if 0x60 <= n && n <= 0x6f => ScheduleType::OtherFuture,
+            _ => {
+                unreachable!("invalid table_id: {}", table_id);
+            }
+        }
     }
 }

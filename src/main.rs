@@ -27,6 +27,8 @@ const PAT_PID: u16 = 0;
 const CAT_PID: u16 = 1;
 const TSDT_PID: u16 = 2;
 
+const EIT_PIDS: [u16; 3] = [0x0012, 0x0026, 0x0027];
+
 const BS_sys: usize = 1536;
 const TB_size: usize = 512;
 
@@ -41,15 +43,13 @@ const STREAM_TYPE_H264: u8 = 0x1b;
 #[derive(Debug)]
 struct PSIProcessor {
     pid: u16,
-    table_id: u8,
     buffer: psi::Buffer,
 }
 
 impl PSIProcessor {
-    fn new(pid: u16, table_id: u8) -> PSIProcessor {
+    fn new(pid: u16) -> PSIProcessor {
         return PSIProcessor {
             pid,
-            table_id,
             buffer: psi::Buffer::new(),
         };
     }
@@ -64,6 +64,9 @@ impl PSIProcessor {
             _ => Ok(None),
         }
     }
+    fn get_buffer(&self) -> &psi::Buffer {
+        &self.buffer
+    }
 }
 
 struct TSPacketProcessor {
@@ -77,7 +80,10 @@ struct TSPacketProcessor {
 impl TSPacketProcessor {
     fn new() -> TSPacketProcessor {
         let mut psip = HashMap::new();
-        psip.insert(0, PSIProcessor::new(0, psi::PROGRAM_ASSOCIATION_SECTION));
+        psip.insert(PAT_PID, PSIProcessor::new(PAT_PID));
+        for pid in EIT_PIDS.iter() {
+            psip.insert(*pid, PSIProcessor::new(*pid));
+        }
         TSPacketProcessor {
             psi_processors: psip,
             pes_processors: HashMap::new(),
@@ -102,10 +108,7 @@ impl TSPacketProcessor {
                         for (program_number, pid) in pas.program_association {
                             if program_number != 0 {
                                 // not network pid
-                                psi_procs.push((
-                                    pid,
-                                    PSIProcessor::new(pid, psi::TS_PROGRAM_MAP_SECTION),
-                                ));
+                                psi_procs.push((pid, PSIProcessor::new(pid)));
                             }
                         }
                         return Ok(());
@@ -113,10 +116,6 @@ impl TSPacketProcessor {
                     psi::TS_PROGRAM_MAP_SECTION => {
                         let pms = psi::TSProgramMapSection::parse(bytes)?;
                         debug!("program map section: {:?}", pms);
-                        for desc in pms.descriptors.iter() {
-                            let psi::Descriptor::Descriptor(tag) = desc;
-                            descriptors.push(*tag);
-                        }
                         for si in pms.stream_info.iter() {
                             stream_types.insert(si.stream_type);
                             match si.stream_type {
@@ -129,6 +128,17 @@ impl TSPacketProcessor {
                                 )),
                                 _ => {}
                             };
+                        }
+                        return Ok(());
+                    }
+                    n if 0x4e <= n && n <= 0x6f => {
+                        let eit = psi::EventInformationSection::parse(bytes)?;
+                        info!("pid: {}, eit: {:?}", packet.pid, eit);
+                        for event in eit.events.iter() {
+                            for desc in event.descriptors.iter() {
+                                let psi::Descriptor::Unsupported(tag, _) = desc;
+                                descriptors.push(*tag);
+                            }
                         }
                         return Ok(());
                     }
@@ -161,7 +171,7 @@ impl TSPacketProcessor {
         if let Some(proc) = self.pes_processors.get_mut(&packet.pid) {
             match proc.feed(&packet, |pes| {
                 if pes.stream_id == 0b10111101 {
-                    info!("pes private stream1 {:?}", pes);
+                    // info!("pes private stream1 {:?}", pes);
                 } else {
                     debug!("pes {:?}", pes);
                 }

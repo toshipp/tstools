@@ -5,13 +5,13 @@ use util;
 use psi::descriptor::Descriptor;
 
 #[derive(Debug)]
-pub struct StreamInfo {
+pub struct StreamInfo<'a> {
     pub stream_type: u8,
     pub elementary_pid: u16,
-    pub descriptors: Vec<Descriptor>,
+    pub descriptors: Vec<Descriptor<'a>>,
 }
 
-impl StreamInfo {
+impl<'a> StreamInfo<'a> {
     fn parse(bytes: &[u8]) -> Result<(StreamInfo, usize), Error> {
         check_len!(bytes.len(), 5);
         let stream_type = bytes[0];
@@ -38,7 +38,7 @@ impl StreamInfo {
 }
 
 #[derive(Debug)]
-pub struct TSProgramMapSection {
+pub struct TSProgramMapSection<'a> {
     pub table_id: u8,
     pub section_syntax_indicator: u8,
     pub program_number: u16,
@@ -47,12 +47,12 @@ pub struct TSProgramMapSection {
     pub section_number: u8,
     pub last_section_number: u8,
     pub pcr_pid: u16,
-    pub descriptors: Vec<Descriptor>,
-    pub stream_info: Vec<StreamInfo>,
+    pub descriptors: Vec<Descriptor<'a>>,
+    pub stream_info: Vec<StreamInfo<'a>>,
     pub crc_32: u32,
 }
 
-impl TSProgramMapSection {
+impl<'a> TSProgramMapSection<'a> {
     pub fn parse(bytes: &[u8]) -> Result<TSProgramMapSection, Error> {
         let table_id = bytes[0];
         if table_id != 0x02 {
