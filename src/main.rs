@@ -134,12 +134,6 @@ impl TSPacketProcessor {
                     n if 0x4e <= n && n <= 0x6f => {
                         let eit = psi::EventInformationSection::parse(bytes)?;
                         info!("pid: {}, eit: {:?}", packet.pid, eit);
-                        for event in eit.events.iter() {
-                            for desc in event.descriptors.iter() {
-                                let psi::Descriptor::Unsupported(tag, _) = desc;
-                                descriptors.push(*tag);
-                            }
-                        }
                         return Ok(());
                     }
                     _ => {

@@ -16,14 +16,6 @@ pub struct Event<'a> {
     pub duration: Option<Duration>,
     pub running_status: u8,
     pub free_ca_mode: bool,
-
-    //0x4d short event
-    //0x4e exntended event desc
-    //0x50 component desc
-    //0x54 content desc
-    //0xc4 audit component desc
-    //0xc7 data contents desc.
-    //0xd6 event group desc
     pub descriptors: Vec<Descriptor<'a>>,
 }
 
