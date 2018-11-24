@@ -2,8 +2,277 @@ use failure::Error;
 
 use std::fmt;
 
-#[derive(Debug)]
+extern crate encoding_index_japanese;
+use self::encoding_index_japanese::jis0208;
+use std::iter::Iterator;
+use std::mem;
+
+#[derive(Copy, Clone)]
+enum Code {
+    Kanji,
+    Eisu,
+    Hiragana,
+    Katakana,
+    MosaicA,
+    MosaicB,
+    MosaicC,
+    MosaicD,
+    ProportionalEisu,
+    ProportionalHiragana,
+    ProportionalKatakana,
+    JISX0201,
+    JISGokanKanji1,
+    JISGokanKanji2,
+    TsuikaKigou,
+    DRCS(u8),
+    Macro,
+}
+
+enum Invocation {
+    Lock(Code),
+    Single(Code, Code),
+}
+
+impl Code {
+    fn from_termination(f: u8) -> Code {
+        match f {
+            0x42 => Code::Kanji,
+            0x4a => Code::Eisu,
+            0x30 => Code::Hiragana,
+            0x31 => Code::Katakana,
+            0x32 => Code::MosaicA,
+            0x33 => Code::MosaicB,
+            0x34 => Code::MosaicC,
+            0x35 => Code::MosaicD,
+            0x036 => Code::ProportionalEisu,
+            0x037 => Code::ProportionalHiragana,
+            0x038 => Code::ProportionalKatakana,
+            0x49 => Code::JISX0201,
+            0x39 => Code::JISGokanKanji1,
+            0x3a => Code::JISGokanKanji2,
+            0x3b => Code::TsuikaKigou,
+            0x40...0x4f => Code::DRCS(f - 0x40),
+            0x70 => Code::Macro,
+            _ => unreachable!(),
+        }
+    }
+
+    fn decode<I: Iterator<Item = u8>>(&self, iter: &mut I) -> char {
+        match self {
+            Code::Kanji => {
+                let code_point =
+                    (u16::from(iter.next().unwrap()) << 8) | u16::from(iter.next().unwrap());
+                let c = jis0208::forward(code_point);
+                unsafe { mem::transmute(c) }
+            }
+            Code::Eisu | Code::ProportionalEisu => char::from(iter.next().unwrap() + 0x20),
+            Code::Hiragana | Code::ProportionalHiragana => {
+                let c = match iter.next().unwrap() {
+                    code_point @ 0x21...0x73 => 0x3041 + u32::from(code_point),
+                    0x77 => 0x309d,
+                    0x78 => 0x309e,
+                    0x79 => 0x30fc,
+                    0x7a => 0x3002,
+                    0x7b => 0x300c,
+                    0x7c => 0x300d,
+                    0x7d => 0x3001,
+                    0x7e => 0x30fb,
+                    c @ _ => {
+                        println!("code {}", c);
+                        unreachable!();
+                    }
+                };
+                unsafe { mem::transmute(c) }
+            }
+            Code::Katakana | Code::ProportionalKatakana => {
+                let c = match iter.next().unwrap() {
+                    code_point @ 0x21...0x76 => 0x30a1 + u32::from(code_point),
+                    0x77 => 0x30fd,
+                    0x78 => 0x30fe,
+                    0x79 => 0x30fc,
+                    0x7a => 0x3002,
+                    0x7b => 0x300c,
+                    0x7c => 0x300d,
+                    0x7d => 0x3001,
+                    0x7e => 0x30fb,
+                    _ => unreachable!(),
+                };
+                unsafe { mem::transmute(c) }
+            }
+            Code::MosaicA | Code::MosaicB | Code::MosaicC | Code::MosaicD => unimplemented!(),
+            Code::JISX0201 => {
+                let code_point = (iter.next().unwrap() << 8) | iter.next().unwrap();
+                let c = 0xff61 + u32::from(code_point) - 0x21;
+                unsafe { mem::transmute(c) }
+            }
+            Code::JISGokanKanji1 => {
+                // TODO
+                let code_point =
+                    (u16::from(iter.next().unwrap()) << 8) | u16::from(iter.next().unwrap());
+                let c = jis0208::forward(code_point);
+                unsafe { mem::transmute(c) }
+            }
+            Code::JISGokanKanji2 => unimplemented!(),
+            Code::TsuikaKigou => unimplemented!(),
+            Code::DRCS(n) => unimplemented!(),
+            Code::Macro => unimplemented!(),
+        }
+    }
+}
+
+struct AribDecoder {
+    gl: Invocation,
+    gr: Invocation,
+    g: [Code; 4],
+}
+
+const ESC: u8 = 0x1b;
+const LS0: u8 = 0xf;
+const LS1: u8 = 0xe;
+const LS2: u8 = 0x6e;
+const LS3: u8 = 0x6f;
+const LS1R: u8 = 0x7e;
+const LS2R: u8 = 0x7d;
+const LS3R: u8 = 0x7c;
+const SS2: u8 = 0x19;
+const SS3: u8 = 0x1d;
+
+impl AribDecoder {
+    fn new() -> AribDecoder {
+        AribDecoder {
+            gl: Invocation::Lock(Code::Kanji),
+            gr: Invocation::Lock(Code::Hiragana),
+            g: [Code::Kanji, Code::Eisu, Code::Hiragana, Code::Macro],
+        }
+    }
+
+    fn decode(&mut self, input: &[u8]) -> String {
+        let mut iter = input.iter().map(|x| *x).peekable();
+        let mut string = String::new();
+        while let Some(&b) = iter.peek() {
+            if !self.set_state(b, &mut iter) {
+                if b < 0x80 {
+                    let c = match self.gl {
+                        // todo
+                        Invocation::Lock(code) => code.decode(&mut iter),
+                        Invocation::Single(code, p) => {
+                            let c = code.decode(&mut iter);
+                            self.gl = Invocation::Lock(p);
+                            c
+                        }
+                    };
+                    string.push(c);
+                } else {
+                    let mut iter = (&mut iter).map(move |x| x & 0x7f);
+                    let c = match self.gr {
+                        // todo
+                        Invocation::Lock(code) => code.decode(&mut iter),
+                        Invocation::Single(code, p) => {
+                            let c = code.decode(&mut iter);
+                            self.gl = Invocation::Lock(p);
+                            c
+                        }
+                    };
+                    string.push(c);
+                }
+            }
+        }
+        string
+    }
+
+    fn set_state<I: Iterator<Item = u8>>(&mut self, b0: u8, s: &mut I) -> bool {
+        match b0 {
+            LS0 => self.gl = Invocation::Lock(self.g[0]),
+            LS1 => self.gl = Invocation::Lock(self.g[1]),
+            ESC => {
+                let b1 = s.next().unwrap();
+                match b1 {
+                    LS2 => self.gl = Invocation::Lock(self.g[2]),
+                    LS3 => self.gl = Invocation::Lock(self.g[3]),
+                    LS1R => self.gr = Invocation::Lock(self.g[1]),
+                    LS2R => self.gr = Invocation::Lock(self.g[2]),
+                    LS3R => self.gr = Invocation::Lock(self.g[3]),
+                    x @ 0x28...0x2b => {
+                        let b2 = s.next().unwrap();
+                        let pos = usize::from(x - 0x28);
+                        let code = if b2 == 0x20 {
+                            // DRCS
+                            let b4 = s.next().unwrap();
+                            Code::from_termination(b4)
+                        } else {
+                            Code::from_termination(b2)
+                        };
+                        self.g[pos] = code;
+                    }
+                    0x24 => {
+                        let b2 = s.next().unwrap();
+                        match b2 {
+                            0x28 => {
+                                let b3 = s.next().unwrap();
+                                if b3 != 0x20 {
+                                    unreachable!();
+                                }
+                                let b4 = s.next().unwrap();
+                                self.g[0] = Code::from_termination(b4);
+                            }
+                            x @ 0x29...0x2b => {
+                                let b3 = s.next().unwrap();
+                                let pos = usize::from(x - 0x28);
+                                let code = if b3 == 0x20 {
+                                    // DRCS
+                                    let b4 = s.next().unwrap();
+                                    Code::from_termination(b4)
+                                } else {
+                                    Code::from_termination(b3)
+                                };
+                                self.g[pos] = code;
+                            }
+                            _ => self.g[0] = Code::from_termination(b2),
+                        }
+                    }
+                    _ => {
+                        unreachable!();
+                    }
+                }
+            }
+            SS2 => {
+                // multiple single shift?
+                let prev = match self.gl {
+                    Invocation::Lock(p) => p,
+                    Invocation::Single(_, p) => p,
+                };
+                self.gl = Invocation::Single(self.g[2], prev);
+            }
+            SS3 => {
+                let prev = match self.gl {
+                    Invocation::Lock(p) => p,
+                    Invocation::Single(_, p) => p,
+                };
+                self.gl = Invocation::Single(self.g[3], prev);
+            }
+            0x00...0x1f | 0x80...0x90 => {
+                // other controls
+                // unimplemented!()
+                return false;
+            }
+            _ => {
+                // non control
+                return false;
+            }
+        }
+        true
+    }
+}
+
 pub struct AribString<'a>(&'a [u8]);
+
+impl<'a> fmt::Debug for AribString<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut decoder = AribDecoder::new();
+        let s = decoder.decode(self.0);
+        write!(f, "{:?}", s)
+    }
+}
 
 #[derive(Debug)]
 pub enum Descriptor<'a> {
