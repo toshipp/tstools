@@ -147,7 +147,7 @@ impl AribDecoder {
     }
 
     fn decode(&mut self, input: &[u8]) -> String {
-        let mut iter = input.iter().map(|x| *x).peekable();
+        let mut iter = input.iter().cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
             if !self.set_state(b, &mut iter) {
