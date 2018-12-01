@@ -2,8 +2,8 @@ use failure::Error;
 
 use std::fmt;
 
-extern crate encoding_index_japanese;
-use self::encoding_index_japanese::jis0208;
+extern crate jisx0213;
+
 use std::iter::Iterator;
 use std::mem;
 
@@ -57,15 +57,20 @@ impl Code {
         }
     }
 
-    fn decode<I: Iterator<Item = u8>>(&self, iter: &mut I) -> char {
+    fn decode<I: Iterator<Item = u8>>(&self, iter: &mut I, out: &mut String) {
         match self {
-            Code::Kanji => {
-                let code_point =
-                    (u16::from(iter.next().unwrap()) << 8) | u16::from(iter.next().unwrap());
-                let c = jis0208::forward(code_point);
-                unsafe { mem::transmute(c) }
+            Code::Kanji | Code::JISGokanKanji1 => {
+                let code_point = 0x10000
+                    | (u32::from(iter.next().unwrap()) << 8)
+                    | u32::from(iter.next().unwrap());
+                println!("cp: {:x}", code_point);
+                let chars = jisx0213::code_point_to_chars(code_point).unwrap();
+                println!("chars: {:?}", chars);
+                out.extend(chars);
             }
-            Code::Eisu | Code::ProportionalEisu => char::from(iter.next().unwrap() + 0x20),
+            Code::Eisu | Code::ProportionalEisu => {
+                out.push(char::from(iter.next().unwrap() + 0x20))
+            }
             Code::Hiragana | Code::ProportionalHiragana => {
                 let c = match iter.next().unwrap() {
                     code_point @ 0x21...0x73 => 0x3041 + u32::from(code_point),
@@ -82,7 +87,7 @@ impl Code {
                         unreachable!();
                     }
                 };
-                unsafe { mem::transmute(c) }
+                out.push(unsafe { mem::transmute(c) });
             }
             Code::Katakana | Code::ProportionalKatakana => {
                 let c = match iter.next().unwrap() {
@@ -97,22 +102,20 @@ impl Code {
                     0x7e => 0x30fb,
                     _ => unreachable!(),
                 };
-                unsafe { mem::transmute(c) }
+                out.push(unsafe { mem::transmute(c) });
             }
             Code::MosaicA | Code::MosaicB | Code::MosaicC | Code::MosaicD => unimplemented!(),
             Code::JISX0201 => {
                 let code_point = (iter.next().unwrap() << 8) | iter.next().unwrap();
                 let c = 0xff61 + u32::from(code_point) - 0x21;
-                unsafe { mem::transmute(c) }
+                out.push(unsafe { mem::transmute(c) });
             }
-            Code::JISGokanKanji1 => {
-                // TODO
-                let code_point =
-                    (u16::from(iter.next().unwrap()) << 8) | u16::from(iter.next().unwrap());
-                let c = jis0208::forward(code_point);
-                unsafe { mem::transmute(c) }
+            Code::JISGokanKanji2 => {
+                let code_point = 0x20000
+                    | (u32::from(iter.next().unwrap()) << 8)
+                    | u32::from(iter.next().unwrap());
+                out.extend(jisx0213::code_point_to_chars(code_point).unwrap());
             }
-            Code::JISGokanKanji2 => unimplemented!(),
             Code::TsuikaKigou => unimplemented!(),
             Code::DRCS(n) => unimplemented!(),
             Code::Macro => unimplemented!(),
@@ -152,28 +155,24 @@ impl AribDecoder {
         while let Some(&b) = iter.peek() {
             if !self.set_state(b, &mut iter) {
                 if b < 0x80 {
-                    let c = match self.gl {
+                    match self.gl {
                         // todo
-                        Invocation::Lock(code) => code.decode(&mut iter),
+                        Invocation::Lock(code) => code.decode(&mut iter, &mut string),
                         Invocation::Single(code, p) => {
-                            let c = code.decode(&mut iter);
+                            code.decode(&mut iter, &mut string);
                             self.gl = Invocation::Lock(p);
-                            c
                         }
-                    };
-                    string.push(c);
+                    }
                 } else {
                     let mut iter = (&mut iter).map(move |x| x & 0x7f);
-                    let c = match self.gr {
+                    match self.gr {
                         // todo
-                        Invocation::Lock(code) => code.decode(&mut iter),
+                        Invocation::Lock(code) => code.decode(&mut iter, &mut string),
                         Invocation::Single(code, p) => {
-                            let c = code.decode(&mut iter);
+                            code.decode(&mut iter, &mut string);
                             self.gl = Invocation::Lock(p);
-                            c
                         }
-                    };
-                    string.push(c);
+                    }
                 }
             }
         }

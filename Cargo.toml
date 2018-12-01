@@ -9,10 +9,11 @@ lazy_static = "1.1.0"
 log = "0.4"
 env_logger = "0.5.13"
 macros = { path = "macros" }
+jisx0213 = { path = "jisx0213" }
 chrono = "0.4"
-encoding-index-japanese = "1.20141219.5"
 
 [workspace]
 members = [
-       "macros"
+       "macros",
+       "jisx0213",
 ]
