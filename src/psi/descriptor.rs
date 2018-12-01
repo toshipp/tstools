@@ -4,8 +4,8 @@ use std::fmt;
 
 extern crate jisx0213;
 
+use std::char;
 use std::iter::Iterator;
-use std::mem;
 
 #[derive(Copy, Clone)]
 enum Code {
@@ -87,7 +87,7 @@ impl Code {
                         unreachable!();
                     }
                 };
-                out.push(unsafe { mem::transmute(c) });
+                out.push(unsafe { char::from_u32_unchecked(c) });
             }
             Code::Katakana | Code::ProportionalKatakana => {
                 let c = match iter.next().unwrap() {
@@ -102,13 +102,13 @@ impl Code {
                     0x7e => 0x30fb,
                     _ => unreachable!(),
                 };
-                out.push(unsafe { mem::transmute(c) });
+                out.push(unsafe { char::from_u32_unchecked(c) });
             }
             Code::MosaicA | Code::MosaicB | Code::MosaicC | Code::MosaicD => unimplemented!(),
             Code::JISX0201 => {
                 let code_point = (iter.next().unwrap() << 8) | iter.next().unwrap();
                 let c = 0xff61 + u32::from(code_point) - 0x21;
-                out.push(unsafe { mem::transmute(c) });
+                out.push(unsafe { char::from_u32_unchecked(c) });
             }
             Code::JISGokanKanji2 => {
                 let code_point = 0x20000
