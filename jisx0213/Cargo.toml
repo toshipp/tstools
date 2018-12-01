@@ -1,0 +1,6 @@
+[package]
+name = "jisx0213"
+version = "0.1.0"
+authors = ["toshi_pp <toshiq2@gmail.com>"]
+
+[dependencies]
