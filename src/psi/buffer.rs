@@ -1,6 +1,6 @@
 use failure::Error;
 
-use ts;
+use crate::ts;
 
 #[derive(Debug)]
 enum BufferState {

@@ -5,9 +5,9 @@ use self::chrono::{DateTime, Duration};
 
 use failure::Error;
 
-use util;
+use crate::util;
 
-use psi::Descriptor;
+use crate::psi::Descriptor;
 
 #[derive(Debug)]
 pub struct Event<'a> {

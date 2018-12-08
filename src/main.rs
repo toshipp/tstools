@@ -97,7 +97,7 @@ impl TSPacketProcessor {
         let mut stream_types = HashSet::new();
         let mut psi_procs = Vec::new();
         let mut pes_procs = Vec::new();
-        let mut descriptors = Vec::new();
+        let descriptors = Vec::new();
 
         if let Some(proc) = self.psi_processors.get_mut(&packet.pid) {
             match proc.feed(&packet, |bytes| {

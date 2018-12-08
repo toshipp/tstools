@@ -1,8 +1,8 @@
 use failure::Error;
 
-use util;
+use crate::util;
 
-use psi::descriptor::Descriptor;
+use crate::psi::descriptor::Descriptor;
 
 #[derive(Debug)]
 pub struct StreamInfo<'a> {

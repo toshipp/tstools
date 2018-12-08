@@ -117,7 +117,7 @@ impl Code {
                 out.extend(jisx0213::code_point_to_chars(code_point).unwrap());
             }
             Code::TsuikaKigou => unimplemented!(),
-            Code::DRCS(n) => unimplemented!(),
+            Code::DRCS(_n) => unimplemented!(),
             Code::Macro => unimplemented!(),
         }
     }

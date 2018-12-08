@@ -1,8 +1,8 @@
 use failure::Error;
 use std::collections::HashMap;
 
-use crc32;
-use util;
+use crate::crc32;
+use crate::util;
 
 #[derive(Debug)]
 pub struct ProgramAssociationSection<'a> {
