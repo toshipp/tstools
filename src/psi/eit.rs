@@ -1,4 +1,4 @@
-extern crate chrono;
+use chrono;
 
 use self::chrono::offset::{FixedOffset, TimeZone};
 use self::chrono::{DateTime, Duration};
@@ -48,7 +48,7 @@ pub struct EventInformationSection<'a> {
 }
 
 impl<'a> Event<'a> {
-    fn parse(bytes: &[u8]) -> Result<(Event, usize), Error> {
+    fn parse(bytes: &[u8]) -> Result<(Event<'_>, usize), Error> {
         check_len!(bytes.len(), 12);
         let event_id = (u16::from(bytes[0]) << 8) | u16::from(bytes[1]);
         let start_time = Event::parse_datetime(&bytes[2..7])?;
@@ -139,7 +139,7 @@ impl<'a> Event<'a> {
 }
 
 impl<'a> EventInformationSection<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<EventInformationSection, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<EventInformationSection<'_>, Error> {
         let table_id = bytes[0];
         let section_syntax_indicator = bytes[1] >> 7;
         let section_length = (usize::from(bytes[1] & 0xf) << 8) | usize::from(bytes[2]);

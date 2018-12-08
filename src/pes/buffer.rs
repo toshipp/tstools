@@ -28,7 +28,7 @@ impl Buffer {
 
     pub fn feed<F: FnMut(&[u8]) -> Result<(), Error>>(
         &mut self,
-        packet: &ts::TSPacket,
+        packet: &ts::TSPacket<'_>,
         mut f: F,
     ) -> Result<(), Error> {
         if packet.transport_error_indicator {

@@ -66,7 +66,7 @@ pub enum PESPacketBody<'a> {
 }
 
 impl<'a> PESPacket<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<PESPacket, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<PESPacket<'_>, Error> {
         if bytes.len() < 3 + 1 + 2 {
             bail!("too short for PES packet {}", bytes.len());
         }
@@ -102,7 +102,7 @@ impl<'a> PESPacket<'a> {
     }
 }
 impl<'a> NormalPESPacketBody<'a> {
-    fn parse(bytes: &[u8]) -> Result<NormalPESPacketBody, Error> {
+    fn parse(bytes: &[u8]) -> Result<NormalPESPacketBody<'_>, Error> {
         if bytes.len() < 3 {
             bail!("too short for pes packet {}", bytes.len());
         }
@@ -176,7 +176,7 @@ impl<'a> NormalPESPacketBody<'a> {
             Option<DSMTrickMode>,
             Option<u8>,
             Option<u16>,
-            Option<PESPacketExtension>,
+            Option<PESPacketExtension<'_>>,
         ),
         Error,
     > {
@@ -259,7 +259,7 @@ impl<'a> NormalPESPacketBody<'a> {
         ))
     }
 
-    fn parse_extension_fields(mut bytes: &[u8]) -> Result<PESPacketExtension, Error> {
+    fn parse_extension_fields(mut bytes: &[u8]) -> Result<PESPacketExtension<'_>, Error> {
         check_len!(bytes.len(), 1);
         let pes_private_data_flag = bytes[0] & 0x80 > 0;
         let pack_header_field_flag = bytes[0] & 0x40 > 0;

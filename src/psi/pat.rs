@@ -20,7 +20,7 @@ pub struct ProgramAssociationSection<'a> {
 }
 
 impl<'a> ProgramAssociationSection<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection<'_>, Error> {
         let table_id = bytes[0];
         if table_id != 0 {
             bail!("invalid table_id: {}", table_id);

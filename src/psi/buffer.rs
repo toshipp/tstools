@@ -26,7 +26,7 @@ impl Buffer {
             buf: Vec::new(),
         }
     }
-    pub fn feed(&mut self, packet: &ts::TSPacket) -> Result<Option<&[u8]>, Error> {
+    pub fn feed(&mut self, packet: &ts::TSPacket<'_>) -> Result<Option<&[u8]>, Error> {
         if packet.transport_error_indicator {
             return Ok(None);
         }

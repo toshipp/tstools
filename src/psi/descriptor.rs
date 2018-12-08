@@ -2,7 +2,7 @@ use failure::Error;
 
 use std::fmt;
 
-extern crate jisx0213;
+use jisx0213;
 
 use std::char;
 use std::iter::Iterator;
@@ -51,7 +51,7 @@ impl Code {
             0x39 => Code::JISGokanKanji1,
             0x3a => Code::JISGokanKanji2,
             0x3b => Code::TsuikaKigou,
-            0x40...0x4f => Code::DRCS(f - 0x40),
+            0x40..=0x4f => Code::DRCS(f - 0x40),
             0x70 => Code::Macro,
             _ => unreachable!(),
         }
@@ -73,7 +73,7 @@ impl Code {
             }
             Code::Hiragana | Code::ProportionalHiragana => {
                 let c = match iter.next().unwrap() {
-                    code_point @ 0x21...0x73 => 0x3041 + u32::from(code_point),
+                    code_point @ 0x21..=0x73 => 0x3041 + u32::from(code_point),
                     0x77 => 0x309d,
                     0x78 => 0x309e,
                     0x79 => 0x30fc,
@@ -91,7 +91,7 @@ impl Code {
             }
             Code::Katakana | Code::ProportionalKatakana => {
                 let c = match iter.next().unwrap() {
-                    code_point @ 0x21...0x76 => 0x30a1 + u32::from(code_point),
+                    code_point @ 0x21..=0x76 => 0x30a1 + u32::from(code_point),
                     0x77 => 0x30fd,
                     0x78 => 0x30fe,
                     0x79 => 0x30fc,
@@ -191,7 +191,7 @@ impl AribDecoder {
                     LS1R => self.gr = Invocation::Lock(self.g[1]),
                     LS2R => self.gr = Invocation::Lock(self.g[2]),
                     LS3R => self.gr = Invocation::Lock(self.g[3]),
-                    x @ 0x28...0x2b => {
+                    x @ 0x28..=0x2b => {
                         let b2 = s.next().unwrap();
                         let pos = usize::from(x - 0x28);
                         let code = if b2 == 0x20 {
@@ -214,7 +214,7 @@ impl AribDecoder {
                                 let b4 = s.next().unwrap();
                                 self.g[0] = Code::from_termination(b4);
                             }
-                            x @ 0x29...0x2b => {
+                            x @ 0x29..=0x2b => {
                                 let b3 = s.next().unwrap();
                                 let pos = usize::from(x - 0x28);
                                 let code = if b3 == 0x20 {
@@ -249,7 +249,7 @@ impl AribDecoder {
                 };
                 self.gl = Invocation::Single(self.g[3], prev);
             }
-            0x00...0x1f | 0x80...0x90 => {
+            0x00..=0x1f | 0x80..=0x90 => {
                 // other controls
                 // unimplemented!()
                 return false;
@@ -266,7 +266,7 @@ impl AribDecoder {
 pub struct AribString<'a>(&'a [u8]);
 
 impl<'a> fmt::Debug for AribString<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut decoder = AribDecoder::new();
         let s = decoder.decode(self.0);
         write!(f, "{:?}", s)
@@ -289,7 +289,7 @@ pub struct ShortEventDescriptor<'a> {
 }
 
 impl<'a> ShortEventDescriptor<'a> {
-    fn parse(bytes: &[u8]) -> Result<ShortEventDescriptor, Error> {
+    fn parse(bytes: &[u8]) -> Result<ShortEventDescriptor<'_>, Error> {
         let tag = bytes[0];
         if tag != 0x4d {
             bail!("invalid tag");
@@ -318,7 +318,7 @@ pub struct ExtendedEventDescriptorItem<'a> {
 }
 
 impl<'a> ExtendedEventDescriptorItem<'a> {
-    fn parse(bytes: &[u8]) -> Result<(ExtendedEventDescriptorItem, usize), Error> {
+    fn parse(bytes: &[u8]) -> Result<(ExtendedEventDescriptorItem<'_>, usize), Error> {
         let item_description_length = usize::from(bytes[0]);
         let item_description = AribString(&bytes[1..1 + item_description_length]);
         let item_length;
@@ -348,7 +348,7 @@ pub struct ExtendedEventDescriptor<'a> {
 }
 
 impl<'a> ExtendedEventDescriptor<'a> {
-    fn parse(bytes: &[u8]) -> Result<ExtendedEventDescriptor, Error> {
+    fn parse(bytes: &[u8]) -> Result<ExtendedEventDescriptor<'_>, Error> {
         let tag = bytes[0];
         if tag != 0x4e {
             bail!("invalid tag");
@@ -403,7 +403,7 @@ pub enum Genre {
 }
 
 impl fmt::Display for Genre {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             Genre::News => "ニュース/報道",
             Genre::Sports => "スポーツ",
@@ -426,8 +426,8 @@ impl fmt::Display for Genre {
 }
 
 impl fmt::Debug for Genre {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        (self as &fmt::Display).fmt(f)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (self as &dyn fmt::Display).fmt(f)
     }
 }
 
@@ -474,7 +474,7 @@ pub struct UnsupportedDescriptor<'a> {
 }
 
 impl<'a> UnsupportedDescriptor<'a> {
-    fn parse(bytes: &[u8]) -> Result<UnsupportedDescriptor, Error> {
+    fn parse(bytes: &[u8]) -> Result<UnsupportedDescriptor<'_>, Error> {
         let descriptor_tag = bytes[0];
         let length = usize::from(bytes[1]);
         Ok(UnsupportedDescriptor {
@@ -485,7 +485,7 @@ impl<'a> UnsupportedDescriptor<'a> {
 }
 
 impl<'a> Descriptor<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<(Descriptor, usize), Error> {
+    pub fn parse(bytes: &[u8]) -> Result<(Descriptor<'_>, usize), Error> {
         check_len!(bytes.len(), 2);
         let descriptor_tag = bytes[0];
         let descriptor_length = usize::from(bytes[1]);

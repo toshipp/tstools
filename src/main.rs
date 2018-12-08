@@ -1,6 +1,6 @@
 #[macro_use]
 extern crate log;
-extern crate env_logger;
+use env_logger;
 
 #[macro_use]
 extern crate failure;
@@ -66,7 +66,7 @@ impl PSIProcessor {
     }
     fn feed<T, F: FnOnce(&[u8]) -> Result<T, Error>>(
         &mut self,
-        packet: &ts::TSPacket,
+        packet: &ts::TSPacket<'_>,
         f: F,
     ) -> Result<Option<T>, Error> {
         match self.buffer.feed(packet)?.map(f) {
@@ -105,7 +105,7 @@ impl TSPacketProcessor {
         }
     }
 
-    fn process_psi(&mut self, packet: &ts::TSPacket) -> Result<(), Error> {
+    fn process_psi(&mut self, packet: &ts::TSPacket<'_>) -> Result<(), Error> {
         let mut stream_types = HashSet::new();
         let mut psi_procs = Vec::new();
         let mut pes_procs = Vec::new();
@@ -173,7 +173,7 @@ impl TSPacketProcessor {
         Ok(())
     }
 
-    fn process_pes(&mut self, packet: &ts::TSPacket) -> Result<(), Error> {
+    fn process_pes(&mut self, packet: &ts::TSPacket<'_>) -> Result<(), Error> {
         if let Some(proc) = self.pes_processors.get_mut(&packet.pid) {
             match proc.feed(&packet, |pes| {
                 if pes.stream_id == 0b10111101 {
@@ -228,9 +228,9 @@ impl PESProcessor {
             buffer: pes::Buffer::new(),
         };
     }
-    fn feed<F: FnMut(pes::PESPacket) -> Result<(), Error>>(
+    fn feed<F: FnMut(pes::PESPacket<'_>) -> Result<(), Error>>(
         &mut self,
-        packet: &ts::TSPacket,
+        packet: &ts::TSPacket<'_>,
         mut f: F,
     ) -> Result<(), Error> {
         self.buffer

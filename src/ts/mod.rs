@@ -22,7 +22,7 @@ pub struct TSPacket<'a> {
 }
 
 impl<'a> TSPacket<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<TSPacket, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<TSPacket<'_>, Error> {
         if bytes.len() != TS_PACKET_LENGTH {
             bail!("bytes does not {}", TS_PACKET_LENGTH);
         }

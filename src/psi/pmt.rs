@@ -12,7 +12,7 @@ pub struct StreamInfo<'a> {
 }
 
 impl<'a> StreamInfo<'a> {
-    fn parse(bytes: &[u8]) -> Result<(StreamInfo, usize), Error> {
+    fn parse(bytes: &[u8]) -> Result<(StreamInfo<'_>, usize), Error> {
         check_len!(bytes.len(), 5);
         let stream_type = bytes[0];
         let elementary_pid = (u16::from(bytes[1] & 0x1f) << 8) | u16::from(bytes[2]);
@@ -53,7 +53,7 @@ pub struct TSProgramMapSection<'a> {
 }
 
 impl<'a> TSProgramMapSection<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<TSProgramMapSection, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<TSProgramMapSection<'_>, Error> {
         let table_id = bytes[0];
         if table_id != 0x02 {
             bail!("table_id should 0x02, {}", table_id);
