@@ -16,6 +16,7 @@ lazy_static! {
     };
 }
 
+#[allow(dead_code)]
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xffffffff;
     for x in data.iter() {

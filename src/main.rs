@@ -24,20 +24,31 @@ mod ts;
 mod util;
 
 const PAT_PID: u16 = 0;
+#[allow(dead_code)]
 const CAT_PID: u16 = 1;
+#[allow(dead_code)]
 const TSDT_PID: u16 = 2;
 
 const EIT_PIDS: [u16; 3] = [0x0012, 0x0026, 0x0027];
 
-const BS_sys: usize = 1536;
-const TB_size: usize = 512;
+#[allow(dead_code)]
+const BS_SYS: usize = 1536;
+#[allow(dead_code)]
+const TB_SIZE: usize = 512;
 
+#[allow(dead_code)]
 const STREAM_TYPE_VIDEO: u8 = 0x2;
+#[allow(dead_code)]
 const STREAM_TYPE_PES_PRIVATE_DATA: u8 = 0x6;
+#[allow(dead_code)]
 const STREAM_TYPE_TYPE_D: u8 = 0xd;
+#[allow(dead_code)]
 const STREAM_TYPE_ADTS: u8 = 0xf;
+#[allow(dead_code)]
 const STREAM_TYPE_RESERVED_BEGIN: u8 = 0x15;
+#[allow(dead_code)]
 const STREAM_TYPE_RESERVED_END: u8 = 0x7f;
+#[allow(dead_code)]
 const STREAM_TYPE_H264: u8 = 0x1b;
 
 #[derive(Debug)]
@@ -64,6 +75,7 @@ impl PSIProcessor {
             _ => Ok(None),
         }
     }
+    #[allow(dead_code)]
     fn get_buffer(&self) -> &psi::Buffer {
         &self.buffer
     }

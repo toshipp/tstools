@@ -14,5 +14,6 @@ mod eit;
 pub use self::eit::*;
 
 pub const PROGRAM_ASSOCIATION_SECTION: u8 = 0;
+#[allow(dead_code)]
 pub const CONDITIONAL_ACCESS_SECTION: u8 = 1;
 pub const TS_PROGRAM_MAP_SECTION: u8 = 2;

@@ -64,6 +64,7 @@ impl<'a> ProgramAssociationSection<'a> {
         })
     }
 
+    #[allow(dead_code)]
     fn calculate_crc32(&self) -> u32 {
         return crc32::crc32(self._raw_bytes);
     }
