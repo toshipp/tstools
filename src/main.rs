@@ -10,6 +10,7 @@ use std::io::{Error as StdError, ErrorKind, Read};
 
 #[macro_use]
 mod util;
+mod arib;
 mod crc32;
 mod pes;
 mod psi;
