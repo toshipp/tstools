@@ -3,6 +3,7 @@ use chrono;
 use self::chrono::offset::{FixedOffset, TimeZone};
 use self::chrono::{DateTime, Duration};
 
+use failure::bail;
 use failure::Error;
 
 use crate::util;

@@ -1,13 +1,7 @@
-#[macro_use]
-extern crate log;
 use env_logger;
+use log::{debug, info};
 
-#[macro_use]
-extern crate failure;
 use failure::Error;
-
-#[macro_use]
-extern crate lazy_static;
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -15,13 +9,11 @@ use std::io;
 use std::io::{Error as StdError, ErrorKind, Read};
 
 #[macro_use]
-extern crate macros;
-
+mod util;
 mod crc32;
 mod pes;
 mod psi;
 mod ts;
-mod util;
 
 const PAT_PID: u16 = 0;
 #[allow(dead_code)]

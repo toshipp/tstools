@@ -1,4 +1,5 @@
 use failure::Error;
+use failure::{bail, format_err};
 
 use std::error;
 use std::fmt;

@@ -122,10 +122,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "macros"
-version = "0.1.0"
-
-[[package]]
 name = "memchr"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -269,7 +265,6 @@ dependencies = [
  "jisx0213 0.1.0",
  "lazy_static 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.5 (registry+https://github.com/rust-lang/crates.io-index)",
- "macros 0.1.0",
 ]
 
 [[package]]

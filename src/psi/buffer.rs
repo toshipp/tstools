@@ -1,3 +1,4 @@
+use failure::bail;
 use failure::Error;
 
 use crate::ts;

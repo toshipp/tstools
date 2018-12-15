@@ -1,3 +1,5 @@
+use lazy_static::lazy_static;
+
 lazy_static! {
     static ref CRC32_TABLE: [u32; 256] = {
         let mut table = [0u32; 256];

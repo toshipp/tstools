@@ -1,3 +1,4 @@
+use failure::bail;
 use failure::Error;
 
 pub const TS_PACKET_LENGTH: usize = 188;
