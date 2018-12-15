@@ -1,6 +1,8 @@
 use failure::bail;
 use failure::Error;
 
+use log::info;
+
 use std::fmt;
 
 use crate::arib::string::AribDecoder;
@@ -10,8 +12,13 @@ pub struct AribString<'a>(&'a [u8]);
 impl<'a> fmt::Debug for AribString<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut decoder = AribDecoder::new();
-        let s = decoder.decode(self.0);
-        write!(f, "{:?}", s)
+        match decoder.decode(self.0.iter()) {
+            Ok(s) => write!(f, "\"{}\"", s),
+            Err(e) => {
+                info!("decode error {:?} {:?}", e, self.0);
+                write!(f, "\"Err(xxx)\"")
+            }
+        }
     }
 }
 
@@ -55,20 +62,20 @@ impl<'a> ShortEventDescriptor<'a> {
 
 #[derive(Debug)]
 pub struct ExtendedEventDescriptorItem<'a> {
-    pub item_description: AribString<'a>,
-    pub item: AribString<'a>,
+    pub item_description: &'a [u8],
+    pub item: &'a [u8],
 }
 
-impl<'a> ExtendedEventDescriptorItem<'a> {
+impl ExtendedEventDescriptorItem<'_> {
     fn parse(bytes: &[u8]) -> Result<(ExtendedEventDescriptorItem<'_>, usize), Error> {
         let item_description_length = usize::from(bytes[0]);
-        let item_description = AribString(&bytes[1..1 + item_description_length]);
+        let item_description = &bytes[1..1 + item_description_length];
         let item_length;
         let item;
         {
             let bytes = &bytes[1 + item_description_length..];
             item_length = usize::from(bytes[0]);
-            item = AribString(&bytes[1..1 + item_length]);
+            item = &bytes[1..1 + item_length];
         }
         Ok((
             ExtendedEventDescriptorItem {
@@ -86,7 +93,7 @@ pub struct ExtendedEventDescriptor<'a> {
     pub last_descriptor_number: u8,
     pub iso_639_language_code: String,
     pub items: Vec<ExtendedEventDescriptorItem<'a>>,
-    pub text: AribString<'a>,
+    pub text: &'a [u8],
 }
 
 impl<'a> ExtendedEventDescriptor<'a> {
@@ -110,7 +117,7 @@ impl<'a> ExtendedEventDescriptor<'a> {
         }
         let bytes = &bytes[7 + length_of_items..];
         let text_length = usize::from(bytes[0]);
-        let text = AribString(&bytes[1..1 + text_length]);
+        let text = &bytes[1..1 + text_length];
         Ok(ExtendedEventDescriptor {
             descriptor_number,
             last_descriptor_number,

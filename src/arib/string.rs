@@ -76,7 +76,8 @@ impl Code {
                 let code_point = 0x10000
                     | (u32::from(iter.next().ok_or(AribDecodeError {})?) << 8)
                     | u32::from(iter.next().ok_or(AribDecodeError {})?);
-                let chars = jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?;
+                let chars = jisx0213::code_point_to_chars(code_point)
+                    .ok_or(format_err!("unknown cp: {:x}", code_point))?;
                 out.extend(chars);
             }
             Code::Alnum | Code::ProportionalAlnum => {
@@ -84,10 +85,7 @@ impl Code {
             }
             Code::Hiragana | Code::ProportionalHiragana => {
                 let c = match iter.next().ok_or(AribDecodeError {})? {
-                    code_point @ 0x21..=0x73 => {
-                        println!("h cp: {}", code_point);
-                        0x3041 + u32::from(code_point) - 0x21
-                    }
+                    code_point @ 0x21..=0x73 => 0x3041 + u32::from(code_point) - 0x21,
                     0x77 => 0x309d,
                     0x78 => 0x309e,
                     0x79 => 0x30fc,
@@ -98,7 +96,6 @@ impl Code {
                     0x7e => 0x30fb,
                     _ => unreachable!(),
                 };
-                println!("h {}", unsafe { char::from_u32_unchecked(c) });
                 out.push(unsafe { char::from_u32_unchecked(c) });
             }
             Code::Katakana | Code::ProportionalKatakana => {
@@ -135,7 +132,6 @@ impl Code {
             Code::DRCS(_n) => unimplemented!(),
             Code::Macro => unimplemented!(),
         }
-        //println!("{:?} {}", self, out);
         Ok(())
     }
 }
@@ -192,12 +188,12 @@ impl AribDecoder {
         }
     }
 
-    pub fn decode(&mut self, input: &[u8]) -> Result<String, Error> {
-        let mut iter = input.iter().cloned().peekable();
+    pub fn decode<'a, I: Iterator<Item = &'a u8>>(&mut self, iter: I) -> Result<String, Error> {
+        let mut iter = iter.cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
             if self.is_control(b) {
-                self.set_state(&mut iter)?
+                self.set_state(&mut iter, &mut string)?
             } else {
                 let code = if b < 0x80 {
                     match self.gl {
@@ -219,19 +215,25 @@ impl AribDecoder {
                     }
                 };
                 let mut iter = (&mut iter).map(move |x| x & 0x7f);
-                code.decode(&mut iter, &mut string)
-                    .map_err(|_| format_err!("{}, {:?}", string, input))?;
+                code.decode(&mut iter, &mut string).map_err(|e| {
+                    println!("partial decoded {}", string);
+                    e
+                })?;
             }
         }
-        println!("{} {:?}", string, input);
         Ok(string)
     }
 
     fn is_control(&self, b: u8) -> bool {
-        (b & 0x7f) < 0x20
+        let lo = b & 0x7f;
+        lo <= 0x20 || lo == 0x7f
     }
 
-    fn set_state<I: Iterator<Item = u8>>(&mut self, s: &mut I) -> Result<(), Error> {
+    fn set_state<I: Iterator<Item = u8>>(
+        &mut self,
+        s: &mut I,
+        out: &mut String,
+    ) -> Result<(), Error> {
         let s0 = s.next().ok_or(AribDecodeError {})?;
         match s0 {
             LS0 => self.gl = Invocation::Lock(self.g[0]),
@@ -305,12 +307,17 @@ impl AribDecoder {
             0x00..=0x1f => {
                 // c0
                 //todo
+                println!("c0 {}", s0);
                 match s0 {
                     PAPF | APS => {
                         s.next();
                     }
                     _ => {}
                 }
+            }
+            0x20 => out.push(' '),
+            0x7f => {
+                // DEL
             }
             0x80..=0x9f => {
                 // c1
@@ -327,6 +334,8 @@ impl AribDecoder {
                     _ => {}
                 }
             }
+            0xa0 => {}
+            0xff => {}
             _ => {
                 // non control
                 unreachable!()

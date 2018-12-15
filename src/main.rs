@@ -120,7 +120,7 @@ impl TSPacketProcessor {
                     }
                     psi::TS_PROGRAM_MAP_SECTION => {
                         let pms = psi::TSProgramMapSection::parse(bytes)?;
-                        debug!("program map section: {:?}", pms);
+                        debug!("program map section: {:#?}", pms);
                         for si in pms.stream_info.iter() {
                             stream_types.insert(si.stream_type);
                             match si.stream_type {
@@ -138,7 +138,24 @@ impl TSPacketProcessor {
                     }
                     n if 0x4e <= n && n <= 0x6f => {
                         let eit = psi::EventInformationSection::parse(bytes)?;
-                        info!("pid: {}, eit: {:?}", packet.pid, eit);
+                        //info!("pid: {}, eit: {:#?}", packet.pid, eit);
+                        for event in eit.events {
+                            info!("event {:#?}", event);
+                            let mut extended_event = Vec::new();
+                            for desc in event.descriptors {
+                                match desc {
+                                    psi::Descriptor::ExtendedEvent(e) => {
+                                        extended_event.push(e);
+                                    }
+                                    _ => {
+                                        info!("\tdesc: {:#?}", desc);
+                                    }
+                                }
+                            }
+                            info!("\textended event: {:#?}", extended_event);
+                            let mut decoder = arib::string::AribDecoder::new();
+                            //extended_event[0].
+                        }
                         return Ok(());
                     }
                     _ => {
@@ -147,7 +164,7 @@ impl TSPacketProcessor {
                 }
             }) {
                 Err(e) => {
-                    info!("psi process error: {:?}", e);
+                    info!("psi process error: {:#?}", e);
                     return Err(e);
                 }
                 _ => {}
@@ -172,14 +189,14 @@ impl TSPacketProcessor {
                 if pes.stream_id == 0b10111101 {
                     // info!("pes private stream1 {:?}", pes);
                 } else {
-                    debug!("pes {:?}", pes);
+                    debug!("pes {:#?}", pes);
                 }
                 Ok(())
             }) {
                 Err(e) => {
-                    info!("error: {:?}", e);
-                    info!("pesp {:?}", proc);
-                    info!("packet {:?}", packet);
+                    info!("error: {:#?}", e);
+                    info!("pesp {:#?}", proc);
+                    info!("packet {:#?}", packet);
                     return Err(e);
                 }
                 _ => {}
@@ -230,7 +247,7 @@ impl PESProcessor {
             .feed(packet, |bytes| match pes::PESPacket::parse(bytes) {
                 Ok(pes) => f(pes),
                 Err(e) => {
-                    info!("pes parse error raw bytes : {:?}", bytes);
+                    info!("pes parse error raw bytes : {:#?}", bytes);
                     Err(e)
                 }
             })
@@ -250,17 +267,17 @@ fn main() {
                     break;
                 }
             }
-            debug!("{:?}", e);
+            debug!("{:#?}", e);
         }
     }
-    info!("types: {:?}", processor.stream_types);
-    info!("descriptors: {:?}", processor.descriptors);
+    info!("types: {:#?}", processor.stream_types);
+    info!("descriptors: {:#?}", processor.descriptors);
     let pids = processor
         .pes_processors
         .keys()
         .chain(processor.psi_processors.keys())
         .map(|x| *x)
         .collect::<HashSet<_>>();
-    info!("proceeded {:?}", pids);
-    info!("pids: {:?}", processor.pids.difference(&pids));
+    info!("proceeded {:#?}", pids);
+    info!("pids: {:#?}", processor.pids.difference(&pids));
 }
