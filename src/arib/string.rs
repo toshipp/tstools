@@ -7,20 +7,20 @@ use std::fmt;
 #[derive(Copy, Clone, Debug)]
 enum Code {
     Kanji,
-    Eisu,
+    Alnum,
     Hiragana,
     Katakana,
     MosaicA,
     MosaicB,
     MosaicC,
     MosaicD,
-    ProportionalEisu,
+    ProportionalAlnum,
     ProportionalHiragana,
     ProportionalKatakana,
     JISX0201,
     JISGokanKanji1,
     JISGokanKanji2,
-    TsuikaKigou,
+    Symbol,
     DRCS(u8),
     Macro,
 }
@@ -50,20 +50,20 @@ impl Code {
     fn from_termination(f: u8) -> Code {
         match f {
             0x42 => Code::Kanji,
-            0x4a => Code::Eisu,
+            0x4a => Code::Alnum,
             0x30 => Code::Hiragana,
             0x31 => Code::Katakana,
             0x32 => Code::MosaicA,
             0x33 => Code::MosaicB,
             0x34 => Code::MosaicC,
             0x35 => Code::MosaicD,
-            0x036 => Code::ProportionalEisu,
+            0x036 => Code::ProportionalAlnum,
             0x037 => Code::ProportionalHiragana,
             0x038 => Code::ProportionalKatakana,
             0x49 => Code::JISX0201,
             0x39 => Code::JISGokanKanji1,
             0x3a => Code::JISGokanKanji2,
-            0x3b => Code::TsuikaKigou,
+            0x3b => Code::Symbol,
             0x40..=0x4f => Code::DRCS(f - 0x40),
             0x70 => Code::Macro,
             _ => unreachable!(),
@@ -79,7 +79,7 @@ impl Code {
                 let chars = jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?;
                 out.extend(chars);
             }
-            Code::Eisu | Code::ProportionalEisu => {
+            Code::Alnum | Code::ProportionalAlnum => {
                 out.push(char::from(iter.next().ok_or(AribDecodeError {})?))
             }
             Code::Hiragana | Code::ProportionalHiragana => {
@@ -127,8 +127,8 @@ impl Code {
                     | u32::from(iter.next().ok_or(AribDecodeError {})?);
                 out.extend(jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?);
             }
-            Code::TsuikaKigou => println!(
-                "tsuikakigou {:x} {:x}",
+            Code::Symbol => println!(
+                "symbol {:x} {:x}",
                 iter.next().ok_or(AribDecodeError {})?,
                 iter.next().ok_or(AribDecodeError {})?
             ),
@@ -188,7 +188,7 @@ impl AribDecoder {
         AribDecoder {
             gl: Invocation::Lock(Code::Kanji),
             gr: Invocation::Lock(Code::Hiragana),
-            g: [Code::Kanji, Code::Eisu, Code::Hiragana, Code::Katakana],
+            g: [Code::Kanji, Code::Alnum, Code::Hiragana, Code::Katakana],
         }
     }
 
