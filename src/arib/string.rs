@@ -1,5 +1,6 @@
 use failure::format_err;
 use failure::Error;
+use log::info;
 use std::char;
 use std::error;
 use std::fmt;
@@ -108,7 +109,9 @@ impl Charset {
                 let code_point = 0x20000 | (u32::from(next!()) << 8) | u32::from(next!());
                 out.extend(jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?);
             }
-            Charset::Symbol => println!("symbol {:x} {:x}", next!(), next!()),
+            Charset::Symbol => {
+                info!("symbol {:x} {:x}", next!(), next!());
+            }
             Charset::DRCS(_n) => unimplemented!(),
             Charset::Macro => unimplemented!(),
         }
@@ -231,10 +234,7 @@ impl AribDecoder {
             } else {
                 let charset = if b < 0x80 { &mut self.gl } else { &mut self.gr };
                 let mut iter = (&mut iter).map(move |x| x & 0x7f);
-                charset.decode(&mut iter, &mut string).map_err(|e| {
-                    println!("partial decoded {}", string);
-                    e
-                })?;
+                charset.decode(&mut iter, &mut string)?;
             }
         }
         Ok(string)
@@ -315,7 +315,7 @@ impl AribDecoder {
             0x00..=0x1f => {
                 // c0
                 //todo
-                println!("c0 {}", s0);
+                info!("c0 {}", s0);
                 match s0 {
                     PAPF | APS => {
                         s.next();
@@ -329,7 +329,7 @@ impl AribDecoder {
             }
             0x80..=0x9f => {
                 // c1
-                println!("c1 {}", s0);
+                info!("c1 {}", s0);
                 match s0 {
                     COL | POL | SZX | FLC | CDC | WMM | RPC | HLC => {
                         if next!() == 0x20 {

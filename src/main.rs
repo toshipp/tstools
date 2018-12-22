@@ -98,6 +98,73 @@ impl TSPacketProcessor {
         }
     }
 
+    fn process_eit(eit: psi::EventInformationSection) -> Result<(), Error> {
+        for event in eit.events {
+            debug!("{:#?}", event);
+            info!(
+                concat!(
+                    "service_id={}, ",
+                    "table_id={}, ",
+                    "event event_id={}, ",
+                    "start_time={:?}, ",
+                    "duration={:?}, ",
+                    "running_status={}"
+                ),
+                eit.service_id,
+                eit.table_id,
+                event.event_id,
+                event.start_time,
+                event.duration,
+                event.running_status
+            );
+            let mut ee_text = Vec::new();
+            let mut item_descs = Vec::new();
+            let mut items = Vec::new();
+            for desc in event.descriptors.iter() {
+                match desc {
+                    psi::Descriptor::ExtendedEvent(e) => {
+                        for item in e.items.iter() {
+                            if !item.item_description.is_empty() {
+                                let d = arib::string::decode_to_utf8(
+                                    item_descs.iter().cloned().flatten(),
+                                )
+                                .unwrap();
+                                let i =
+                                    arib::string::decode_to_utf8(items.iter().cloned().flatten())
+                                        .unwrap();
+                                if !d.is_empty() && !i.is_empty() {
+                                    info!("ee {}: {}", d, i);
+                                }
+                                item_descs.clear();
+                                items.clear();
+                            }
+                            item_descs.push(item.item_description);
+                            items.push(item.item);
+                        }
+                        ee_text.push(e.text);
+                    }
+                    psi::Descriptor::ShortEvent(e) => {
+                        info!("{:#?}", e);
+                    }
+                    psi::Descriptor::Content(e) => {
+                        info!("{:#?}", e);
+                    }
+                    _ => {}
+                }
+            }
+            let d = arib::string::decode_to_utf8(item_descs.iter().cloned().flatten()).unwrap();
+            let i = arib::string::decode_to_utf8(items.iter().cloned().flatten()).unwrap();
+            if !d.is_empty() && !i.is_empty() {
+                info!("ee {}: {}", d, i);
+            }
+            let text = arib::string::decode_to_utf8(ee_text.into_iter().flatten()).unwrap();
+            if !text.is_empty() {
+                info!("ee text: {}", text);
+            }
+        }
+        Ok(())
+    }
+
     fn process_psi(&mut self, packet: &ts::TSPacket<'_>) -> Result<(), Error> {
         let mut stream_types = HashSet::new();
         let mut psi_procs = Vec::new();
@@ -138,25 +205,7 @@ impl TSPacketProcessor {
                     }
                     n if 0x4e <= n && n <= 0x6f => {
                         let eit = psi::EventInformationSection::parse(bytes)?;
-                        //info!("pid: {}, eit: {:#?}", packet.pid, eit);
-                        for event in eit.events {
-                            info!("event {:#?}", event);
-                            let mut extended_event = Vec::new();
-                            for desc in event.descriptors {
-                                match desc {
-                                    psi::Descriptor::ExtendedEvent(e) => {
-                                        extended_event.push(e);
-                                    }
-                                    _ => {
-                                        info!("\tdesc: {:#?}", desc);
-                                    }
-                                }
-                            }
-                            info!("\textended event: {:#?}", extended_event);
-                            let mut decoder = arib::string::AribDecoder::new();
-                            //extended_event[0].
-                        }
-                        return Ok(());
+                        return TSPacketProcessor::process_eit(eit);
                     }
                     _ => {
                         unreachable!("bug");

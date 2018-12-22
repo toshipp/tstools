@@ -5,14 +5,13 @@ use log::info;
 
 use std::fmt;
 
-use crate::arib::string::AribDecoder;
+use crate::arib::string::decode_to_utf8;
 
 pub struct AribString<'a>(&'a [u8]);
 
 impl<'a> fmt::Debug for AribString<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut decoder = AribDecoder::new();
-        match decoder.decode(self.0.iter()) {
+        match decode_to_utf8(self.0.iter()) {
             Ok(s) => write!(f, "\"{}\"", s),
             Err(e) => {
                 info!("decode error {:?} {:?}", e, self.0);
