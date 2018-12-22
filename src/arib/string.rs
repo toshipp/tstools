@@ -4,8 +4,12 @@ use std::char;
 use std::error;
 use std::fmt;
 
-#[derive(Copy, Clone, Debug)]
-enum Code {
+pub fn decode_to_utf8<'a, I: Iterator<Item = &'a u8>>(iter: I) -> Result<String, Error> {
+    AribDecoder::new().decode(iter)
+}
+
+#[derive(Copy, Clone)]
+enum Charset {
     Kanji,
     Alnum,
     Hiragana,
@@ -25,9 +29,91 @@ enum Code {
     Macro,
 }
 
-enum Invocation {
-    Lock(Code),
-    Single(Code, Code),
+impl Charset {
+    fn from_termination(f: u8) -> Charset {
+        match f {
+            0x42 => Charset::Kanji,
+            0x4a => Charset::Alnum,
+            0x30 => Charset::Hiragana,
+            0x31 => Charset::Katakana,
+            0x32 => Charset::MosaicA,
+            0x33 => Charset::MosaicB,
+            0x34 => Charset::MosaicC,
+            0x35 => Charset::MosaicD,
+            0x036 => Charset::ProportionalAlnum,
+            0x037 => Charset::ProportionalHiragana,
+            0x038 => Charset::ProportionalKatakana,
+            0x49 => Charset::JISX0201,
+            0x39 => Charset::JISGokanKanji1,
+            0x3a => Charset::JISGokanKanji2,
+            0x3b => Charset::Symbol,
+            0x40..=0x4f => Charset::DRCS(f - 0x40),
+            0x70 => Charset::Macro,
+            _ => unreachable!(),
+        }
+    }
+
+    fn decode<I: Iterator<Item = u8>>(&self, iter: &mut I, out: &mut String) -> Result<(), Error> {
+        macro_rules! next {
+            () => {
+                iter.next().ok_or(AribDecodeError {})?
+            };
+        }
+        match self {
+            Charset::Kanji | Charset::JISGokanKanji1 => {
+                let code_point = 0x10000 | (u32::from(next!()) << 8) | u32::from(next!());
+                let chars = jisx0213::code_point_to_chars(code_point)
+                    .ok_or(format_err!("unknown cp: {:x}", code_point))?;
+                out.extend(chars);
+            }
+            Charset::Alnum | Charset::ProportionalAlnum => out.push(char::from(next!())),
+            Charset::Hiragana | Charset::ProportionalHiragana => {
+                let c = match next!() {
+                    code_point @ 0x21..=0x73 => 0x3041 + u32::from(code_point) - 0x21,
+                    0x77 => 0x309d,
+                    0x78 => 0x309e,
+                    0x79 => 0x30fc,
+                    0x7a => 0x3002,
+                    0x7b => 0x300c,
+                    0x7c => 0x300d,
+                    0x7d => 0x3001,
+                    0x7e => 0x30fb,
+                    _ => unreachable!(),
+                };
+                out.push(unsafe { char::from_u32_unchecked(c) });
+            }
+            Charset::Katakana | Charset::ProportionalKatakana => {
+                let c = match next!() {
+                    code_point @ 0x21..=0x76 => 0x30a1 + u32::from(code_point) - 0x21,
+                    0x77 => 0x30fd,
+                    0x78 => 0x30fe,
+                    0x79 => 0x30fc,
+                    0x7a => 0x3002,
+                    0x7b => 0x300c,
+                    0x7c => 0x300d,
+                    0x7d => 0x3001,
+                    0x7e => 0x30fb,
+                    _ => unreachable!(),
+                };
+                out.push(unsafe { char::from_u32_unchecked(c) });
+            }
+            Charset::MosaicA | Charset::MosaicB | Charset::MosaicC | Charset::MosaicD => {
+                unimplemented!()
+            }
+            Charset::JISX0201 => {
+                let c = 0xff61 + u32::from(next!()) - 0x21;
+                out.push(unsafe { char::from_u32_unchecked(c) });
+            }
+            Charset::JISGokanKanji2 => {
+                let code_point = 0x20000 | (u32::from(next!()) << 8) | u32::from(next!());
+                out.extend(jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?);
+            }
+            Charset::Symbol => println!("symbol {:x} {:x}", next!(), next!()),
+            Charset::DRCS(_n) => unimplemented!(),
+            Charset::Macro => unimplemented!(),
+        }
+        Ok(())
+    }
 }
 
 struct AribDecodeError {}
@@ -46,100 +132,43 @@ impl fmt::Debug for AribDecodeError {
 
 impl error::Error for AribDecodeError {}
 
-impl Code {
-    fn from_termination(f: u8) -> Code {
-        match f {
-            0x42 => Code::Kanji,
-            0x4a => Code::Alnum,
-            0x30 => Code::Hiragana,
-            0x31 => Code::Katakana,
-            0x32 => Code::MosaicA,
-            0x33 => Code::MosaicB,
-            0x34 => Code::MosaicC,
-            0x35 => Code::MosaicD,
-            0x036 => Code::ProportionalAlnum,
-            0x037 => Code::ProportionalHiragana,
-            0x038 => Code::ProportionalKatakana,
-            0x49 => Code::JISX0201,
-            0x39 => Code::JISGokanKanji1,
-            0x3a => Code::JISGokanKanji2,
-            0x3b => Code::Symbol,
-            0x40..=0x4f => Code::DRCS(f - 0x40),
-            0x70 => Code::Macro,
-            _ => unreachable!(),
+enum Invocation {
+    Lock(Charset),
+    Single(Charset, Charset),
+}
+
+impl Invocation {
+    fn decode<I: Iterator<Item = u8>>(
+        &mut self,
+        iter: &mut I,
+        out: &mut String,
+    ) -> Result<(), Error> {
+        match self {
+            Invocation::Lock(c) => c.decode(iter, out),
+            &mut Invocation::Single(now, prev) => {
+                *self = Invocation::Lock(prev);
+                now.decode(iter, out)
+            }
         }
     }
 
-    fn decode<I: Iterator<Item = u8>>(&self, iter: &mut I, out: &mut String) -> Result<(), Error> {
-        match self {
-            Code::Kanji | Code::JISGokanKanji1 => {
-                let code_point = 0x10000
-                    | (u32::from(iter.next().ok_or(AribDecodeError {})?) << 8)
-                    | u32::from(iter.next().ok_or(AribDecodeError {})?);
-                let chars = jisx0213::code_point_to_chars(code_point)
-                    .ok_or(format_err!("unknown cp: {:x}", code_point))?;
-                out.extend(chars);
-            }
-            Code::Alnum | Code::ProportionalAlnum => {
-                out.push(char::from(iter.next().ok_or(AribDecodeError {})?))
-            }
-            Code::Hiragana | Code::ProportionalHiragana => {
-                let c = match iter.next().ok_or(AribDecodeError {})? {
-                    code_point @ 0x21..=0x73 => 0x3041 + u32::from(code_point) - 0x21,
-                    0x77 => 0x309d,
-                    0x78 => 0x309e,
-                    0x79 => 0x30fc,
-                    0x7a => 0x3002,
-                    0x7b => 0x300c,
-                    0x7c => 0x300d,
-                    0x7d => 0x3001,
-                    0x7e => 0x30fb,
-                    _ => unreachable!(),
-                };
-                out.push(unsafe { char::from_u32_unchecked(c) });
-            }
-            Code::Katakana | Code::ProportionalKatakana => {
-                let c = match iter.next().ok_or(AribDecodeError {})? {
-                    code_point @ 0x21..=0x76 => 0x30a1 + u32::from(code_point) - 0x21,
-                    0x77 => 0x30fd,
-                    0x78 => 0x30fe,
-                    0x79 => 0x30fc,
-                    0x7a => 0x3002,
-                    0x7b => 0x300c,
-                    0x7c => 0x300d,
-                    0x7d => 0x3001,
-                    0x7e => 0x30fb,
-                    _ => unreachable!(),
-                };
-                out.push(unsafe { char::from_u32_unchecked(c) });
-            }
-            Code::MosaicA | Code::MosaicB | Code::MosaicC | Code::MosaicD => unimplemented!(),
-            Code::JISX0201 => {
-                let c = 0xff61 + u32::from(iter.next().ok_or(AribDecodeError {})?) - 0x21;
-                out.push(unsafe { char::from_u32_unchecked(c) });
-            }
-            Code::JISGokanKanji2 => {
-                let code_point = 0x20000
-                    | (u32::from(iter.next().ok_or(AribDecodeError {})?) << 8)
-                    | u32::from(iter.next().ok_or(AribDecodeError {})?);
-                out.extend(jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?);
-            }
-            Code::Symbol => println!(
-                "symbol {:x} {:x}",
-                iter.next().ok_or(AribDecodeError {})?,
-                iter.next().ok_or(AribDecodeError {})?
-            ),
-            Code::DRCS(_n) => unimplemented!(),
-            Code::Macro => unimplemented!(),
+    fn lock(&mut self, c: Charset) {
+        *self = Invocation::Lock(c)
+    }
+
+    fn single(&mut self, c: Charset) {
+        if let Invocation::Lock(prev) = *self {
+            *self = Invocation::Single(c, prev);
+        } else {
+            unreachable!();
         }
-        Ok(())
     }
 }
 
-pub struct AribDecoder {
+struct AribDecoder {
     gl: Invocation,
     gr: Invocation,
-    g: [Code; 4],
+    g: [Charset; 4],
 }
 
 const ESC: u8 = 0x1b;
@@ -180,42 +209,29 @@ const HLC: u8 = 0x97;
 const CSI: u8 = 0x9b;
 
 impl AribDecoder {
-    pub fn new() -> AribDecoder {
+    fn new() -> AribDecoder {
         AribDecoder {
-            gl: Invocation::Lock(Code::Kanji),
-            gr: Invocation::Lock(Code::Hiragana),
-            g: [Code::Kanji, Code::Alnum, Code::Hiragana, Code::Katakana],
+            gl: Invocation::Lock(Charset::Kanji),
+            gr: Invocation::Lock(Charset::Hiragana),
+            g: [
+                Charset::Kanji,
+                Charset::Alnum,
+                Charset::Hiragana,
+                Charset::Katakana,
+            ],
         }
     }
 
-    pub fn decode<'a, I: Iterator<Item = &'a u8>>(&mut self, iter: I) -> Result<String, Error> {
+    fn decode<'a, I: Iterator<Item = &'a u8>>(mut self, iter: I) -> Result<String, Error> {
         let mut iter = iter.cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
             if self.is_control(b) {
                 self.set_state(&mut iter, &mut string)?
             } else {
-                let code = if b < 0x80 {
-                    match self.gl {
-                        // todo
-                        Invocation::Lock(code) => code,
-                        Invocation::Single(code, p) => {
-                            self.gl = Invocation::Lock(p);
-                            code
-                        }
-                    }
-                } else {
-                    match self.gr {
-                        // todo
-                        Invocation::Lock(code) => code,
-                        Invocation::Single(code, p) => {
-                            self.gl = Invocation::Lock(p);
-                            code
-                        }
-                    }
-                };
+                let charset = if b < 0x80 { &mut self.gl } else { &mut self.gr };
                 let mut iter = (&mut iter).map(move |x| x & 0x7f);
-                code.decode(&mut iter, &mut string).map_err(|e| {
+                charset.decode(&mut iter, &mut string).map_err(|e| {
                     println!("partial decoded {}", string);
                     e
                 })?;
@@ -234,54 +250,59 @@ impl AribDecoder {
         s: &mut I,
         out: &mut String,
     ) -> Result<(), Error> {
-        let s0 = s.next().ok_or(AribDecodeError {})?;
+        macro_rules! next {
+            () => {
+                s.next().ok_or(AribDecodeError {})?
+            };
+        }
+        let s0 = next!();
         match s0 {
-            LS0 => self.gl = Invocation::Lock(self.g[0]),
-            LS1 => self.gl = Invocation::Lock(self.g[1]),
+            LS0 => self.gl.lock(self.g[0]),
+            LS1 => self.gl.lock(self.g[1]),
             ESC => {
-                let s1 = s.next().ok_or(AribDecodeError {})?;
+                let s1 = next!();
                 match s1 {
-                    LS2 => self.gl = Invocation::Lock(self.g[2]),
-                    LS3 => self.gl = Invocation::Lock(self.g[3]),
-                    LS1R => self.gr = Invocation::Lock(self.g[1]),
-                    LS2R => self.gr = Invocation::Lock(self.g[2]),
-                    LS3R => self.gr = Invocation::Lock(self.g[3]),
+                    LS2 => self.gl.lock(self.g[2]),
+                    LS3 => self.gl.lock(self.g[3]),
+                    LS1R => self.gr.lock(self.g[1]),
+                    LS2R => self.gr.lock(self.g[2]),
+                    LS3R => self.gr.lock(self.g[3]),
                     0x28..=0x2b => {
                         let pos = usize::from(s1 - 0x28);
-                        let s2 = s.next().ok_or(AribDecodeError {})?;
+                        let s2 = next!();
                         let code = if s2 == 0x20 {
                             // DRCS
-                            let s3 = s.next().ok_or(AribDecodeError {})?;
-                            Code::from_termination(s3)
+                            let s3 = next!();
+                            Charset::from_termination(s3)
                         } else {
-                            Code::from_termination(s2)
+                            Charset::from_termination(s2)
                         };
                         self.g[pos] = code;
                     }
                     0x24 => {
-                        let s2 = s.next().ok_or(AribDecodeError {})?;
+                        let s2 = next!();
                         match s2 {
                             0x28 => {
-                                let s3 = s.next().ok_or(AribDecodeError {})?;
+                                let s3 = next!();
                                 if s3 != 0x20 {
                                     unreachable!();
                                 }
-                                let s4 = s.next().ok_or(AribDecodeError {})?;
-                                self.g[0] = Code::from_termination(s4);
+                                let s4 = next!();
+                                self.g[0] = Charset::from_termination(s4);
                             }
                             0x29..=0x2b => {
-                                let s3 = s.next().ok_or(AribDecodeError {})?;
+                                let s3 = next!();
                                 let pos = usize::from(s2 - 0x28);
                                 let code = if s3 == 0x20 {
                                     // DRCS
-                                    let s4 = s.next().ok_or(AribDecodeError {})?;
-                                    Code::from_termination(s4)
+                                    let s4 = next!();
+                                    Charset::from_termination(s4)
                                 } else {
-                                    Code::from_termination(s3)
+                                    Charset::from_termination(s3)
                                 };
                                 self.g[pos] = code;
                             }
-                            _ => self.g[0] = Code::from_termination(s2),
+                            _ => self.g[0] = Charset::from_termination(s2),
                         }
                     }
                     _ => {
@@ -289,21 +310,8 @@ impl AribDecoder {
                     }
                 }
             }
-            SS2 => {
-                // multiple single shift?
-                let prev = match self.gl {
-                    Invocation::Lock(p) => p,
-                    Invocation::Single(_, p) => p,
-                };
-                self.gl = Invocation::Single(self.g[2], prev);
-            }
-            SS3 => {
-                let prev = match self.gl {
-                    Invocation::Lock(p) => p,
-                    Invocation::Single(_, p) => p,
-                };
-                self.gl = Invocation::Single(self.g[3], prev);
-            }
+            SS2 => self.gl.single(self.g[2]),
+            SS3 => self.gl.single(self.g[3]),
             0x00..=0x1f => {
                 // c0
                 //todo
@@ -324,7 +332,7 @@ impl AribDecoder {
                 println!("c1 {}", s0);
                 match s0 {
                     COL | POL | SZX | FLC | CDC | WMM | RPC | HLC => {
-                        if s.next().ok_or(AribDecodeError {})? == 0x20 {
+                        if next!() == 0x20 {
                             s.next();
                         }
                     }
