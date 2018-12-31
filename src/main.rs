@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
 use std::io::{Error as StdError, ErrorKind, Read};
+use std::mem;
 
 #[macro_use]
 mod util;
@@ -80,6 +81,7 @@ struct TSPacketProcessor {
     stream_types: HashSet<u8>,
     descriptors: HashSet<u8>,
     pids: HashSet<u16>,
+    service_id: Option<u16>,
 }
 
 impl TSPacketProcessor {
@@ -89,12 +91,14 @@ impl TSPacketProcessor {
         for pid in EIT_PIDS.iter() {
             psip.insert(*pid, PSIProcessor::new(*pid));
         }
+        psip.insert(psi::SDT_PID, PSIProcessor::new(psi::SDT_PID));
         TSPacketProcessor {
             psi_processors: psip,
             pes_processors: HashMap::new(),
             stream_types: HashSet::new(),
             descriptors: HashSet::new(),
             pids: HashSet::new(),
+            service_id: None,
         }
     }
 
@@ -117,7 +121,6 @@ impl TSPacketProcessor {
                 event.duration,
                 event.running_status
             );
-            let mut ee_text = Vec::new();
             let mut item_descs = Vec::new();
             let mut items = Vec::new();
             for desc in event.descriptors.iter() {
@@ -141,7 +144,6 @@ impl TSPacketProcessor {
                             item_descs.push(item.item_description);
                             items.push(item.item);
                         }
-                        ee_text.push(e.text);
                     }
                     psi::Descriptor::ShortEvent(e) => {
                         info!("{:#?}", e);
@@ -157,10 +159,6 @@ impl TSPacketProcessor {
             if !d.is_empty() && !i.is_empty() {
                 info!("ee {}: {}", d, i);
             }
-            let text = arib::string::decode_to_utf8(ee_text.into_iter().flatten()).unwrap();
-            if !text.is_empty() {
-                info!("ee text: {}", text);
-            }
         }
         Ok(())
     }
@@ -170,6 +168,7 @@ impl TSPacketProcessor {
         let mut psi_procs = Vec::new();
         let mut pes_procs = Vec::new();
         let descriptors = Vec::new();
+        let mut service_id = mem::replace(&mut self.service_id, None);
 
         if let Some(proc) = self.psi_processors.get_mut(&packet.pid) {
             match proc.feed(&packet, |bytes| {
@@ -205,7 +204,17 @@ impl TSPacketProcessor {
                     }
                     n if 0x4e <= n && n <= 0x6f => {
                         let eit = psi::EventInformationSection::parse(bytes)?;
-                        return TSPacketProcessor::process_eit(eit);
+                        return match service_id {
+                            Some(id) if id == eit.service_id => TSPacketProcessor::process_eit(eit),
+                            _ => Ok(()),
+                        };
+                    }
+                    n if psi::SELF_STREAM_TABLE_ID == n => {
+                        let sdt = psi::ServiceDescriptionSection::parse(bytes)?;
+                        if service_id.is_none() && !sdt.services.is_empty() {
+                            service_id = Some(sdt.services[0].service_id);
+                        }
+                        return Ok(());
                     }
                     _ => {
                         unreachable!("bug");
@@ -228,6 +237,8 @@ impl TSPacketProcessor {
         }
         self.stream_types.extend(stream_types.iter());
         self.descriptors.extend(descriptors.iter());
+
+        self.service_id = service_id;
 
         Ok(())
     }
