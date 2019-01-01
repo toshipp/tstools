@@ -190,6 +190,9 @@ const LS3R: u8 = 0x7c;
 const SS2: u8 = 0x19;
 const SS3: u8 = 0x1d;
 
+// same as CR.
+const APR: u8 = 0xd;
+
 // 1byte parameter
 const PAPF: u8 = 0x16;
 const APS: u8 = 0x1c;
@@ -215,6 +218,11 @@ const MACRO: u8 = 0x95;
 const RPC: u8 = 0x98;
 const HLC: u8 = 0x97;
 const CSI: u8 = 0x9b;
+
+// set font size to small, middle or normal, accordingly.
+const SSZ: u8 = 0x88;
+const MSZ: u8 = 0x89;
+const NSZ: u8 = 0x8a;
 
 impl AribDecoder {
     fn new() -> AribDecoder {
@@ -319,13 +327,16 @@ impl AribDecoder {
             SS3 => self.gl.single(self.g[3]),
             0x00..=0x1f => {
                 // c0
-                //todo
-                info!("c0 {}", s0);
                 match s0 {
                     PAPF | APS => {
                         s.next();
                     }
-                    _ => {}
+                    APR => {
+                        out.push('\r');
+                    }
+                    _ => {
+                        info!("c0 {}", s0);
+                    }
                 }
             }
             0x20 => out.push(' '),
@@ -334,7 +345,6 @@ impl AribDecoder {
             }
             0x80..=0x9f => {
                 // c1
-                info!("c1 {}", s0);
                 match s0 {
                     COL | POL | SZX | FLC | CDC | WMM | RPC | HLC => {
                         if next!() == 0x20 {
@@ -344,7 +354,12 @@ impl AribDecoder {
                     TIME | MACRO | CSI => {
                         unimplemented!();
                     }
-                    _ => {}
+                    SSZ | MSZ | NSZ => {
+                        // ignore font size change
+                    }
+                    _ => {
+                        info!("c1 {}", s0);
+                    }
                 }
             }
             0xa0 => {}
