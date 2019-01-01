@@ -1,3 +1,4 @@
+use super::symbol;
 use failure::format_err;
 use failure::Error;
 use log::info;
@@ -110,7 +111,11 @@ impl Charset {
                 out.extend(jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?);
             }
             Charset::Symbol => {
-                info!("symbol {:x} {:x}", next!(), next!());
+                let cp = (u16::from(next!()) << 8) | u16::from(next!());
+                match symbol::to_char(cp) {
+                    Some(c) => out.push(c),
+                    None => info!("unsupported symbol {:x}", cp),
+                }
             }
             Charset::DRCS(_n) => unimplemented!(),
             Charset::Macro => unimplemented!(),
