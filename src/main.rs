@@ -3,6 +3,10 @@ use log::{debug, info};
 
 use failure::Error;
 
+use chrono::offset::FixedOffset;
+use chrono::{DateTime, Duration};
+
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io;
@@ -75,6 +79,29 @@ impl PSIProcessor {
     }
 }
 
+#[derive(Debug)]
+struct Event {
+    start: DateTime<FixedOffset>,
+    duration: Duration,
+    title: String,
+    summary: String,
+    detail: BTreeMap<String, String>,
+    category: String,
+}
+
+impl Event {
+    fn new(start: DateTime<FixedOffset>, duration: Duration) -> Self {
+        Event {
+            start,
+            duration,
+            title: String::new(),
+            summary: String::new(),
+            detail: BTreeMap::new(),
+            category: String::new(),
+        }
+    }
+}
+
 struct TSPacketProcessor {
     psi_processors: HashMap<u16, PSIProcessor>,
     pes_processors: HashMap<u16, PESProcessor>,
@@ -82,6 +109,7 @@ struct TSPacketProcessor {
     descriptors: HashSet<u8>,
     pids: HashSet<u16>,
     service_id: Option<u16>,
+    events: BTreeMap<u16, Event>,
 }
 
 impl TSPacketProcessor {
@@ -99,28 +127,23 @@ impl TSPacketProcessor {
             descriptors: HashSet::new(),
             pids: HashSet::new(),
             service_id: None,
+            events: BTreeMap::new(),
         }
     }
 
-    fn process_eit(eit: psi::EventInformationSection) -> Result<(), Error> {
+    fn process_eit(
+        events: &mut BTreeMap<u16, Event>,
+        eit: psi::EventInformationSection,
+    ) -> Result<(), Error> {
         for event in eit.events {
-            debug!("{:#?}", event);
-            info!(
-                concat!(
-                    "service_id={}, ",
-                    "table_id={}, ",
-                    "event event_id={}, ",
-                    "start_time={:?}, ",
-                    "duration={:?}, ",
-                    "running_status={}"
-                ),
-                eit.service_id,
-                eit.table_id,
-                event.event_id,
-                event.start_time,
-                event.duration,
-                event.running_status
-            );
+            if event.start_time.is_none() || event.duration.is_none() {
+                continue;
+            }
+            let mut record = events.entry(event.event_id).or_insert(Event::new(
+                event.start_time.unwrap(),
+                event.duration.unwrap(),
+            ));
+
             let mut item_descs = Vec::new();
             let mut items = Vec::new();
             for desc in event.descriptors.iter() {
@@ -130,13 +153,11 @@ impl TSPacketProcessor {
                             if !item.item_description.is_empty() {
                                 let d = arib::string::decode_to_utf8(
                                     item_descs.iter().cloned().flatten(),
-                                )
-                                .unwrap();
+                                )?;
                                 let i =
-                                    arib::string::decode_to_utf8(items.iter().cloned().flatten())
-                                        .unwrap();
+                                    arib::string::decode_to_utf8(items.iter().cloned().flatten())?;
                                 if !d.is_empty() && !i.is_empty() {
-                                    info!("ee {}: {}", d, i);
+                                    record.detail.insert(d, i);
                                 }
                                 item_descs.clear();
                                 items.clear();
@@ -146,10 +167,13 @@ impl TSPacketProcessor {
                         }
                     }
                     psi::Descriptor::ShortEvent(e) => {
-                        info!("{:#?}", e);
+                        record.title = format!("{:?}", e.event_name);
+                        record.summary = format!("{:?}", e.text);
                     }
-                    psi::Descriptor::Content(e) => {
-                        info!("{:#?}", e);
+                    psi::Descriptor::Content(c) => {
+                        if record.category.is_empty() && !c.items.is_empty() {
+                            record.category = format!("{:?}", c.items[0]);
+                        }
                     }
                     _ => {}
                 }
@@ -157,7 +181,7 @@ impl TSPacketProcessor {
             let d = arib::string::decode_to_utf8(item_descs.iter().cloned().flatten()).unwrap();
             let i = arib::string::decode_to_utf8(items.iter().cloned().flatten()).unwrap();
             if !d.is_empty() && !i.is_empty() {
-                info!("ee {}: {}", d, i);
+                record.detail.insert(d, i);
             }
         }
         Ok(())
@@ -169,6 +193,7 @@ impl TSPacketProcessor {
         let mut pes_procs = Vec::new();
         let descriptors = Vec::new();
         let mut service_id = mem::replace(&mut self.service_id, None);
+        let mut events = mem::replace(&mut self.events, BTreeMap::new());
 
         if let Some(proc) = self.psi_processors.get_mut(&packet.pid) {
             match proc.feed(&packet, |bytes| {
@@ -205,7 +230,9 @@ impl TSPacketProcessor {
                     n if 0x4e <= n && n <= 0x6f => {
                         let eit = psi::EventInformationSection::parse(bytes)?;
                         return match service_id {
-                            Some(id) if id == eit.service_id => TSPacketProcessor::process_eit(eit),
+                            Some(id) if id == eit.service_id => {
+                                TSPacketProcessor::process_eit(&mut events, eit)
+                            }
                             _ => Ok(()),
                         };
                     }
@@ -239,6 +266,8 @@ impl TSPacketProcessor {
         self.descriptors.extend(descriptors.iter());
 
         self.service_id = service_id;
+
+        self.events = events;
 
         Ok(())
     }
@@ -336,8 +365,9 @@ fn main() {
         .pes_processors
         .keys()
         .chain(processor.psi_processors.keys())
-        .map(|x| *x)
+        .cloned()
         .collect::<HashSet<_>>();
     info!("proceeded {:#?}", pids);
     info!("pids: {:#?}", processor.pids.difference(&pids));
+    info!("events: {:#?}", processor.events);
 }
