@@ -1,6 +1,8 @@
 use env_logger;
 use log::{debug, info};
 
+use serde_derive::Serialize;
+
 use failure::Error;
 
 use chrono::offset::FixedOffset;
@@ -79,10 +81,18 @@ impl PSIProcessor {
     }
 }
 
-#[derive(Debug)]
+impl serde::Serialize for SeDuration {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i64(self.0.num_seconds())
+    }
+}
+
+struct SeDuration(Duration);
+
+#[derive(Serialize)]
 struct Event {
     start: DateTime<FixedOffset>,
-    duration: Duration,
+    duration: SeDuration,
     title: String,
     summary: String,
     detail: BTreeMap<String, String>,
@@ -93,7 +103,7 @@ impl Event {
     fn new(start: DateTime<FixedOffset>, duration: Duration) -> Self {
         Event {
             start,
-            duration,
+            duration: SeDuration(duration),
             title: String::new(),
             summary: String::new(),
             detail: BTreeMap::new(),
@@ -351,7 +361,7 @@ fn main() {
     let mut processor = TSPacketProcessor::new();
     loop {
         if let Err(e) = processor.feed(&mut handle) {
-            if let Some(e) = e.root_cause().downcast_ref::<StdError>() {
+            if let Some(e) = e.find_root_cause().downcast_ref::<StdError>() {
                 if e.kind() == ErrorKind::UnexpectedEof {
                     break;
                 }
@@ -369,5 +379,7 @@ fn main() {
         .collect::<HashSet<_>>();
     info!("proceeded {:#?}", pids);
     info!("pids: {:#?}", processor.pids.difference(&pids));
-    info!("events: {:#?}", processor.events);
+    for e in processor.events.values() {
+        println!("{}", serde_json::to_string(e).unwrap());
+    }
 }
