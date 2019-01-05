@@ -1,100 +1,121 @@
+use bytes::{Bytes, BytesMut};
+use failure;
 use failure::bail;
-use failure::Error;
+use tokio::prelude::{Async, Stream};
 
 use crate::ts;
 
+const INITIAL_BUFFER: usize = 4096;
+
 #[derive(Debug)]
-enum BufferState {
+enum State {
     Initial,
-    FindingLength,
-    Buffering(u16),
-    Proceeded,
+    Buffering,
+    Closed,
 }
 
 #[derive(Debug)]
-pub struct Buffer {
-    state: BufferState,
+pub struct Buffer<S> {
+    inner: S,
+    state: State,
     counter: u8,
-    buf: Vec<u8>,
+    buf: BytesMut,
 }
 
-impl Buffer {
-    pub fn new() -> Buffer {
+impl<S> Buffer<S> {
+    pub fn new(stream: S) -> Self {
         Buffer {
-            state: BufferState::Initial,
+            inner: stream,
+            state: State::Initial,
             counter: 0,
-            buf: Vec::new(),
+            buf: BytesMut::with_capacity(INITIAL_BUFFER),
         }
     }
 
-    pub fn feed<F: FnMut(&[u8]) -> Result<(), Error>>(
-        &mut self,
-        packet: &ts::TSPacket<'_>,
-        mut f: F,
-    ) -> Result<(), Error> {
-        if packet.transport_error_indicator {
-            return Ok(());
+    fn get_bytes(&mut self) -> Result<Bytes, failure::Error> {
+        if self.buf.len() < 6 {
+            bail!("not enough data");
+        }
+        let pes_packet_length = (usize::from(self.buf[4]) << 8) | usize::from(self.buf[5]);
+        if pes_packet_length == 0 {
+            return Ok(self.buf.take().freeze());
+        }
+        if self.buf.len() < pes_packet_length + 6 {
+            bail!("not enough data");
+        }
+        return Ok(self.buf.split_to(pes_packet_length + 6).freeze());
+    }
+}
+
+impl<S> Stream for Buffer<S>
+where
+    S: Stream<Item = ts::TSPacket>,
+{
+    type Item = Bytes;
+    type Error = failure::Error;
+
+    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+        if let State::Closed = self.state {
+            return Ok(Async::Ready(None));
         }
 
-        if packet.data_bytes.is_none() {
+        let packet = match self.inner.poll() {
+            Ok(Async::Ready(Some(packet))) => packet,
+            Ok(Async::Ready(None)) => {
+                self.state = State::Closed;
+                if let State::Buffering = self.state {
+                    return Ok(Async::Ready(Some(self.get_bytes()?)));
+                }
+                return Ok(Async::Ready(None));
+            }
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Err(e) => bail!("some error"),
+        };
+
+        if packet.transport_error_indicator {
+            return Ok(Async::NotReady);
+        }
+
+        if packet.data.is_none() {
             bail!("no data");
         }
 
-        let mut ret = Ok(());
         if packet.payload_unit_start_indicator {
-            if let BufferState::Buffering(_) = self.state {
-                if self.buf.len() > 0 {
-                    ret = f(&self.buf[..]);
-                }
+            let mut bytes = None;
+            if let State::Buffering = self.state {
+                bytes = Some(self.get_bytes());
             }
-            self.state = BufferState::FindingLength;
+
+            self.state = State::Buffering;
             self.counter = packet.continuity_counter;
             self.buf.clear();
+            self.buf.extend_from_slice(&packet.data.unwrap()[..]);
+
+            return match bytes {
+                Some(Ok(bytes)) => Ok(Async::Ready(Some(bytes))),
+                Some(Err(e)) => Err(e),
+                None => Ok(Async::NotReady),
+            };
         } else {
-            match self.state {
-                BufferState::Initial => {
-                    // seen partial packet
-                    return Ok(());
-                }
-                BufferState::Proceeded => {
-                    // already finished
-                    return Ok(());
-                }
-                _ => {
-                    if self.counter == packet.continuity_counter {
-                        // duplicate packet
-                        return Ok(());
-                    } else if (self.counter + 1) % 16 == packet.continuity_counter {
-                        self.counter = packet.continuity_counter;
-                    } else {
-                        self.state = BufferState::Initial;
-                        bail!("pes packet discontinued");
-                    }
-                }
+            if let State::Initial = self.state {
+                // seen partial packet
+                return Ok(Async::NotReady);
             }
-        }
 
-        self.buf.extend_from_slice(packet.data_bytes.unwrap());
-
-        if let BufferState::FindingLength = self.state {
-            if self.buf.len() < 6 {
-                return ret;
+            if self.counter == packet.continuity_counter {
+                // duplicate packet
+                return Ok(Async::NotReady);
+            } else if (self.counter + 1) % 16 == packet.continuity_counter {
+                self.counter = packet.continuity_counter;
             } else {
-                let pes_packet_length = (u16::from(self.buf[4]) << 8) | u16::from(self.buf[5]);
-                if pes_packet_length == 0 {
-                    // TODO
-                    self.state = BufferState::Buffering(0);
-                } else {
-                    self.state = BufferState::Buffering(pes_packet_length + 6);
-                }
+                self.state = State::Initial;
+                self.buf.clear();
+                bail!("pes packet discontinued");
             }
+
+            self.buf.extend_from_slice(&packet.data.unwrap()[..]);
         }
-        if let BufferState::Buffering(length) = self.state {
-            if length > 0 && self.buf.len() >= (length as usize) {
-                self.state = BufferState::Proceeded;
-                return ret.and(f(&self.buf[..length as usize]));
-            }
-        }
-        return ret;
+
+        Ok(Async::NotReady)
     }
 }
