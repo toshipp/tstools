@@ -3,21 +3,22 @@ use log::{debug, info};
 
 use serde_derive::Serialize;
 
-use failure::format_err;
-use failure::Error;
+use failure;
+use std::cell::RefCell;
+use std::fmt::Debug;
 use std::sync::Arc;
+use std::sync::Mutex;
 use tokio;
 use tokio::codec::FramedRead;
 use tokio::io::stdin;
-use tokio::prelude::future::{empty, ok, Future};
-use tokio::prelude::task::spawn;
+use tokio::prelude::future::{ok, Future, IntoFuture};
 use tokio::prelude::Stream;
 use tokio_channel::mpsc::{channel, Sender};
 
 use chrono::offset::FixedOffset;
 use chrono::{DateTime, Duration};
 
-use futures::future::lazy;
+use futures::future::{join_all, lazy};
 use futures::sink::Sink;
 
 use std::collections::BTreeMap;
@@ -91,7 +92,7 @@ impl Event {
     }
 }
 
-struct TSPacketProcessor {
+struct Context {
     psi_processors: HashMap<u16, Sender<ts::TSPacket>>,
     pes_processors: HashMap<u16, Sender<ts::TSPacket>>,
     stream_types: HashSet<u8>,
@@ -101,10 +102,9 @@ struct TSPacketProcessor {
     events: BTreeMap<u16, Event>,
 }
 
-impl TSPacketProcessor {
-    fn new() -> Arc<TSPacketProcessor> {
-        //psip.insert(psi::SDT_PID, PSIProcessor::new(psi::SDT_PID));
-        let mut ctx = Arc::new(TSPacketProcessor {
+impl Context {
+    fn new() -> Context {
+        Context {
             psi_processors: HashMap::new(),
             pes_processors: HashMap::new(),
             stream_types: HashSet::new(),
@@ -112,28 +112,13 @@ impl TSPacketProcessor {
             pids: HashSet::new(),
             service_id: None,
             events: BTreeMap::new(),
-        });
-        let ctx2 = ctx.clone();
-        let p = Arc::get_mut(&mut ctx).unwrap();
-        let (tx, rx) = channel(0);
-        p.psi_processors.insert(PAT_PID, tx);
-        spawn(psi_processor(ctx2.clone(), rx));
-        for pid in EIT_PIDS.iter() {
-            let (tx, rx) = channel(0);
-            spawn(psi_processor(ctx2.clone(), rx));
-            p.psi_processors.insert(*pid, tx);
         }
-        let (tx, rx) = channel(0);
-        spawn(psi_processor(ctx2.clone(), rx));
-        p.psi_processors.insert(psi::SDT_PID, tx);
-
-        ctx
     }
 
     fn process_eit(
         events: &mut BTreeMap<u16, Event>,
         eit: psi::EventInformationSection,
-    ) -> Result<(), Error> {
+    ) -> Result<(), failure::Error> {
         for event in eit.events {
             if event.start_time.is_none() || event.duration.is_none() {
                 continue;
@@ -187,31 +172,31 @@ impl TSPacketProcessor {
     }
 }
 
-fn demux<S>(mut ctx: Arc<TSPacketProcessor>, s: S, null: Sender<ts::TSPacket>) -> impl Future
+fn demux<S, E>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Future<Item = (), Error = ()>
 where
-    S: Stream<Item = ts::TSPacket, Error = ()>,
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
 {
-    s.for_each(move |packet| {
-        let ret = if let Some(tx) = Arc::get_mut(&mut ctx)
-            .unwrap()
-            .psi_processors
-            .get_mut(&packet.pid)
-        {
-            tx.clone().send(packet)
-        } else if let Some(tx) = Arc::get_mut(&mut ctx)
-            .unwrap()
-            .pes_processors
-            .get_mut(&packet.pid)
-        {
-            tx.clone().send(packet)
-        } else {
-            null.clone().send(packet)
-        };
-        ret.map(|_| ()).map_err(|_| ())
-    })
+    s.map_err(|e| info!("err {}: {:#?}", line!(), e))
+        .for_each(move |packet| {
+            info!("demux: {:#?}", packet);
+            let guard = pctx.lock().unwrap();
+            let ctx = guard.borrow();
+            let ret = if let Some(tx) = ctx.psi_processors.get(&packet.pid) {
+                info!("send");
+                Some(tx.clone().send(packet))
+            } else if let Some(tx) = ctx.pes_processors.get(&packet.pid) {
+                Some(tx.clone().send(packet))
+            } else {
+                None
+            };
+            ret.into_future()
+                .map_err(|e| info!("err {}: {}", line!(), e))
+                .map(|_| ())
+        })
 }
 
-fn psi_processor<S>(mut ctx: Arc<TSPacketProcessor>, s: S) -> impl Stream
+fn pat_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
 where
     S: Stream<Item = ts::TSPacket>,
 {
@@ -220,60 +205,104 @@ where
         let table_id = bytes[0];
         match table_id {
             psi::PROGRAM_ASSOCIATION_SECTION => {
+                let guard = pctx.lock().unwrap();
+                let mut ctx = guard.borrow_mut();
                 let pas = psi::ProgramAssociationSection::parse(bytes)?;
                 for (program_number, pid) in pas.program_association {
                     if program_number != 0 {
                         // not network pid
-                        let (tx, rx) = channel(0);
-                        spawn(psi_processor(ctx.clone(), rx));
-                        Arc::get_mut(&mut ctx)
-                            .unwrap()
-                            .psi_processors
-                            .insert(pid, tx);
+                        let (tx, rx) = channel(1);
+                        tokio::spawn(
+                            pmt_processor(pctx.clone(), rx)
+                                .for_each(|_| ok(()))
+                                .map_err(|e| info!("err {}: {:#?}", line!(), e)),
+                        );
+                        ctx.psi_processors.insert(pid, tx);
                     }
                 }
                 return Ok(());
             }
+            _ => unreachable!(),
+        }
+    })
+}
+
+fn pmt_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
+where
+    S: Stream<Item = ts::TSPacket>,
+{
+    psi::Buffer::new(s).and_then(move |bytes| {
+        let bytes = &bytes[..];
+        let table_id = bytes[0];
+        match table_id {
             psi::TS_PROGRAM_MAP_SECTION => {
+                let guard = pctx.lock().unwrap();
+                let mut ctx = guard.borrow_mut();
                 let pms = psi::TSProgramMapSection::parse(bytes)?;
                 debug!("program map section: {:#?}", pms);
                 for si in pms.stream_info.iter() {
-                    Arc::get_mut(&mut ctx)
-                        .unwrap()
-                        .stream_types
-                        .insert(si.stream_type);
+                    ctx.stream_types.insert(si.stream_type);
                     match si.stream_type {
                         ts::MPEG2_VIDEO_STREAM
                         | ts::PES_PRIVATE_STREAM
                         | ts::ADTS_AUDIO_STREAM
                         | ts::H264_VIDEO_STREAM => {
                             // todo
-                            let (tx, rx) = channel(0);
-                            spawn(pes_processor(rx));
-                            Arc::get_mut(&mut ctx)
-                                .unwrap()
-                                .pes_processors
-                                .insert(si.elementary_pid, tx);
+                            let (tx, rx) = channel(1);
+                            tokio::spawn(
+                                pes_processor(rx)
+                                    .for_each(|_| ok(()))
+                                    .map_err(|e| info!("err {}: {:#?}", line!(), e)),
+                            );
+                            ctx.pes_processors.insert(si.elementary_pid, tx);
                         }
                         _ => {}
                     };
                 }
                 return Ok(());
             }
+            _ => unreachable!(),
+        }
+    })
+}
+
+fn eit_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
+where
+    S: Stream<Item = ts::TSPacket>,
+{
+    psi::Buffer::new(s).and_then(move |bytes| {
+        info!("eit: ");
+        let guard = pctx.lock().unwrap();
+        let mut ctx = guard.borrow_mut();
+        let bytes = &bytes[..];
+        let table_id = bytes[0];
+        match table_id {
             n if 0x4e <= n && n <= 0x6f => {
                 let eit = psi::EventInformationSection::parse(bytes)?;
                 return match ctx.service_id {
-                    Some(id) if id == eit.service_id => TSPacketProcessor::process_eit(
-                        &mut Arc::get_mut(&mut ctx).unwrap().events,
-                        eit,
-                    ),
+                    Some(id) if id == eit.service_id => Context::process_eit(&mut ctx.events, eit),
                     _ => Ok(()),
                 };
             }
+            _ => unreachable!(),
+        }
+    })
+}
+
+fn sdt_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
+where
+    S: Stream<Item = ts::TSPacket>,
+{
+    psi::Buffer::new(s).and_then(move |bytes| {
+        let guard = pctx.lock().unwrap();
+        let mut ctx = guard.borrow_mut();
+        let bytes = &bytes[..];
+        let table_id = bytes[0];
+        match table_id {
             n if psi::SELF_STREAM_TABLE_ID == n => {
                 let sdt = psi::ServiceDescriptionSection::parse(bytes)?;
                 if ctx.service_id.is_none() && !sdt.services.is_empty() {
-                    Arc::get_mut(&mut ctx).unwrap().service_id = Some(sdt.services[0].service_id);
+                    ctx.service_id = Some(sdt.services[0].service_id);
                 }
                 return Ok(());
             }
@@ -284,11 +313,11 @@ where
     })
 }
 
-fn pes_processor<S>(s: S) -> impl Stream
+fn pes_processor<S>(s: S) -> impl Stream<Error = failure::Error>
 where
     S: Stream<Item = ts::TSPacket>,
 {
-    pes::Buffer::new(s).and_then(|bytes| {
+    pes::Buffer::new(s).and_then(move |bytes| {
         match pes::PESPacket::parse(&bytes[..]) {
             Ok(pes) => {
                 if pes.stream_id == 0b10111101 {
@@ -298,7 +327,8 @@ where
                 }
             }
             Err(e) => {
-                info!("pes parse error raw bytes : {:#?}", bytes);
+                info!("pes parse error: {:#?}", e);
+                info!("raw bytes : {:#?}", bytes);
             }
         }
         ok(())
@@ -309,27 +339,72 @@ fn main() {
     env_logger::init();
 
     tokio::run(lazy(|| {
-        let ctx = TSPacketProcessor::new();
+        let mut futures = Vec::new();
+        let pctx = Arc::new(Mutex::new(RefCell::new(Context::new())));
+        {
+            let guard = pctx.lock().unwrap();
+            let mut ctx = guard.borrow_mut();
+
+            // pat
+            let (tx, rx) = channel(1);
+            futures.push(tokio::spawn(
+                pat_processor(pctx.clone(), rx)
+                    .for_each(|_| ok(()))
+                    .map_err(|e| info!("err {}: {:#?}", line!(), e)),
+            ));
+            ctx.psi_processors.insert(PAT_PID, tx);
+
+            // eit
+            for pid in EIT_PIDS.iter() {
+                let (tx, rx) = channel(1);
+                // futures.push(tokio::spawn(
+                //     eit_processor(pctx.clone(), rx)
+                //         .for_each(|_| ok(()))
+                //         .map_err(|e| info!("err {}: {:#?}", line!(), e)),
+                // ));
+                futures.push(tokio::spawn(rx.for_each(|packet: ts::TSPacket| {
+                    info!("eit: {:#}", packet.pid);
+                    Ok(())
+                })));
+                ctx.psi_processors.insert(*pid, tx);
+            }
+
+            // sdt
+            let (tx, rx) = channel(1);
+            futures.push(tokio::spawn(
+                sdt_processor(pctx.clone(), rx)
+                    .for_each(|_| ok(()))
+                    .map_err(|e| info!("err {}: {:#?}", line!(), e)),
+            ));
+            ctx.psi_processors.insert(psi::SDT_PID, tx);
+        }
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        let (tx, rx) = channel(0);
-        let (ntx, nrx) = channel(0);
-        spawn(nrx.for_each(|_| ok(())));
-        spawn(decoder.forward(tx));
-        demux(ctx.clone(), rx.map_err(|e| ()), ntx)
-            .map(|_| ())
-            .map_err(|e| ())
+        futures.push(tokio::spawn(demux(pctx.clone(), decoder).then(move |_| {
+            let guard = pctx.lock().unwrap();
+            let ctx = guard.borrow();
+            info!("types: {:#?}", ctx.stream_types);
+            info!("descriptors: {:#?}", ctx.descriptors);
+            let pids = ctx
+                .pes_processors
+                .keys()
+                .chain(ctx.psi_processors.keys())
+                .cloned()
+                .collect::<HashSet<_>>();
+            info!("proceeded {:#?}", pids);
+            info!("pids: {:#?}", ctx.pids.difference(&pids));
+            for e in ctx.events.values() {
+                println!("{}", serde_json::to_string(e).unwrap());
+            }
+            ok(())
+        })));
+
+        // let (tx, rx) = channel(1);
+        // futures.push(tokio::spawn(tx.send(1).map_err(|_| ()).map(|_| ())));
+        // futures.push(tokio::spawn(rx.for_each(|x| {
+        //     info!("rx {}", x);
+        //     Ok(())
+        // })));
+
+        join_all(futures).map(|_| ())
     }));
-    // info!("types: {:#?}", processor.stream_types);
-    // info!("descriptors: {:#?}", processor.descriptors);
-    // let pids = processor
-    //     .pes_processors
-    //     .keys()
-    //     .chain(processor.psi_processors.keys())
-    //     .cloned()
-    //     .collect::<HashSet<_>>();
-    // info!("proceeded {:#?}", pids);
-    // info!("pids: {:#?}", processor.pids.difference(&pids));
-    // for e in processor.events.values() {
-    //     println!("{}", serde_json::to_string(e).unwrap());
-    // }
 }
