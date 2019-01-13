@@ -1,6 +1,7 @@
 use bytes::{Bytes, BytesMut};
 use failure;
 use failure::bail;
+use std::fmt::Debug;
 use tokio::prelude::{Async, Stream};
 
 use crate::ts;
@@ -47,75 +48,76 @@ impl<S> Buffer<S> {
     }
 }
 
-impl<S> Stream for Buffer<S>
+impl<S, E> Stream for Buffer<S>
 where
-    S: Stream<Item = ts::TSPacket>,
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
 {
     type Item = Bytes;
     type Error = failure::Error;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        if let State::Closed = self.state {
-            return Ok(Async::Ready(None));
-        }
-
-        let packet = match self.inner.poll() {
-            Ok(Async::Ready(Some(packet))) => packet,
-            Ok(Async::Ready(None)) => {
-                self.state = State::Closed;
-                if let State::Buffering = self.state {
-                    return Ok(Async::Ready(Some(self.get_bytes()?)));
-                }
+        loop {
+            if let State::Closed = self.state {
                 return Ok(Async::Ready(None));
             }
-            Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Err(e) => bail!("some error"),
-        };
 
-        if packet.transport_error_indicator {
-            return Ok(Async::NotReady);
-        }
-
-        if packet.data.is_none() {
-            bail!("no data");
-        }
-
-        if packet.payload_unit_start_indicator {
-            let mut bytes = None;
-            if let State::Buffering = self.state {
-                bytes = Some(self.get_bytes());
-            }
-
-            self.state = State::Buffering;
-            self.counter = packet.continuity_counter;
-            self.buf.clear();
-            self.buf.extend_from_slice(&packet.data.unwrap()[..]);
-
-            return match bytes {
-                Some(Ok(bytes)) => Ok(Async::Ready(Some(bytes))),
-                Some(Err(e)) => Err(e),
-                None => Ok(Async::NotReady),
+            let packet = match self.inner.poll() {
+                Ok(Async::Ready(Some(packet))) => packet,
+                Ok(Async::Ready(None)) => {
+                    self.state = State::Closed;
+                    if let State::Buffering = self.state {
+                        return Ok(Async::Ready(Some(self.get_bytes()?)));
+                    }
+                    return Ok(Async::Ready(None));
+                }
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(e) => bail!("some error {:?}", e),
             };
-        } else {
-            if let State::Initial = self.state {
-                // seen partial packet
-                return Ok(Async::NotReady);
+
+            if packet.transport_error_indicator {
+                continue;
             }
 
-            if self.counter == packet.continuity_counter {
-                // duplicate packet
-                return Ok(Async::NotReady);
-            } else if (self.counter + 1) % 16 == packet.continuity_counter {
+            if packet.data.is_none() {
+                bail!("no data");
+            }
+
+            if packet.payload_unit_start_indicator {
+                let mut bytes = None;
+                if let State::Buffering = self.state {
+                    bytes = Some(self.get_bytes());
+                }
+
+                self.state = State::Buffering;
                 self.counter = packet.continuity_counter;
-            } else {
-                self.state = State::Initial;
                 self.buf.clear();
-                bail!("pes packet discontinued");
+                self.buf.extend_from_slice(&packet.data.unwrap()[..]);
+
+                return match bytes {
+                    Some(Ok(bytes)) => Ok(Async::Ready(Some(bytes))),
+                    Some(Err(e)) => Err(e),
+                    None => continue,
+                };
+            } else {
+                if let State::Initial = self.state {
+                    // seen partial packet
+                    continue;
+                }
+
+                if self.counter == packet.continuity_counter {
+                    // duplicate packet
+                    continue;
+                } else if (self.counter + 1) % 16 == packet.continuity_counter {
+                    self.counter = packet.continuity_counter;
+                } else {
+                    self.state = State::Initial;
+                    self.buf.clear();
+                    bail!("pes packet discontinued");
+                }
+
+                self.buf.extend_from_slice(&packet.data.unwrap()[..]);
             }
-
-            self.buf.extend_from_slice(&packet.data.unwrap()[..]);
         }
-
-        Ok(Async::NotReady)
     }
 }

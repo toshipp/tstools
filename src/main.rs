@@ -11,14 +11,14 @@ use std::sync::Mutex;
 use tokio;
 use tokio::codec::FramedRead;
 use tokio::io::stdin;
-use tokio::prelude::future::{ok, Future, IntoFuture};
+use tokio::prelude::future::{ok, Future};
 use tokio::prelude::Stream;
 use tokio_channel::mpsc::{channel, Sender};
 
 use chrono::offset::FixedOffset;
 use chrono::{DateTime, Duration};
 
-use futures::future::{join_all, lazy};
+use futures::future::lazy;
 use futures::sink::Sink;
 
 use std::collections::BTreeMap;
@@ -114,62 +114,60 @@ impl Context {
             events: BTreeMap::new(),
         }
     }
+}
 
-    fn process_eit(
-        events: &mut BTreeMap<u16, Event>,
-        eit: psi::EventInformationSection,
-    ) -> Result<(), failure::Error> {
-        for event in eit.events {
-            if event.start_time.is_none() || event.duration.is_none() {
-                continue;
-            }
-            let mut record = events.entry(event.event_id).or_insert(Event::new(
-                event.start_time.unwrap(),
-                event.duration.unwrap(),
-            ));
+fn process_eit(
+    events: &mut BTreeMap<u16, Event>,
+    eit: psi::EventInformationSection,
+) -> Result<(), failure::Error> {
+    for event in eit.events {
+        if event.start_time.is_none() || event.duration.is_none() {
+            continue;
+        }
+        let mut record = events.entry(event.event_id).or_insert(Event::new(
+            event.start_time.unwrap(),
+            event.duration.unwrap(),
+        ));
 
-            let mut item_descs = Vec::new();
-            let mut items = Vec::new();
-            for desc in event.descriptors.iter() {
-                match desc {
-                    psi::Descriptor::ExtendedEvent(e) => {
-                        for item in e.items.iter() {
-                            if !item.item_description.is_empty() {
-                                let d = arib::string::decode_to_utf8(
-                                    item_descs.iter().cloned().flatten(),
-                                )?;
-                                let i =
-                                    arib::string::decode_to_utf8(items.iter().cloned().flatten())?;
-                                if !d.is_empty() && !i.is_empty() {
-                                    record.detail.insert(d, i);
-                                }
-                                item_descs.clear();
-                                items.clear();
+        let mut item_descs = Vec::new();
+        let mut items = Vec::new();
+        for desc in event.descriptors.iter() {
+            match desc {
+                psi::Descriptor::ExtendedEvent(e) => {
+                    for item in e.items.iter() {
+                        if !item.item_description.is_empty() {
+                            let d =
+                                arib::string::decode_to_utf8(item_descs.iter().cloned().flatten())?;
+                            let i = arib::string::decode_to_utf8(items.iter().cloned().flatten())?;
+                            if !d.is_empty() && !i.is_empty() {
+                                record.detail.insert(d, i);
                             }
-                            item_descs.push(item.item_description);
-                            items.push(item.item);
+                            item_descs.clear();
+                            items.clear();
                         }
+                        item_descs.push(item.item_description);
+                        items.push(item.item);
                     }
-                    psi::Descriptor::ShortEvent(e) => {
-                        record.title = format!("{:?}", e.event_name);
-                        record.summary = format!("{:?}", e.text);
-                    }
-                    psi::Descriptor::Content(c) => {
-                        if record.category.is_empty() && !c.items.is_empty() {
-                            record.category = format!("{:?}", c.items[0]);
-                        }
-                    }
-                    _ => {}
                 }
-            }
-            let d = arib::string::decode_to_utf8(item_descs.iter().cloned().flatten()).unwrap();
-            let i = arib::string::decode_to_utf8(items.iter().cloned().flatten()).unwrap();
-            if !d.is_empty() && !i.is_empty() {
-                record.detail.insert(d, i);
+                psi::Descriptor::ShortEvent(e) => {
+                    record.title = format!("{:?}", e.event_name);
+                    record.summary = format!("{:?}", e.text);
+                }
+                psi::Descriptor::Content(c) => {
+                    if record.category.is_empty() && !c.items.is_empty() {
+                        record.category = format!("{:?}", c.items[0]);
+                    }
+                }
+                _ => {}
             }
         }
-        Ok(())
+        let d = arib::string::decode_to_utf8(item_descs.iter().cloned().flatten()).unwrap();
+        let i = arib::string::decode_to_utf8(items.iter().cloned().flatten()).unwrap();
+        if !d.is_empty() && !i.is_empty() {
+            record.detail.insert(d, i);
+        }
     }
+    Ok(())
 }
 
 fn demux<S, E>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Future<Item = (), Error = ()>
@@ -179,26 +177,26 @@ where
 {
     s.map_err(|e| info!("err {}: {:#?}", line!(), e))
         .for_each(move |packet| {
-            info!("demux: {:#?}", packet);
             let guard = pctx.lock().unwrap();
             let ctx = guard.borrow();
             let ret = if let Some(tx) = ctx.psi_processors.get(&packet.pid) {
-                info!("send");
                 Some(tx.clone().send(packet))
             } else if let Some(tx) = ctx.pes_processors.get(&packet.pid) {
                 Some(tx.clone().send(packet))
             } else {
                 None
             };
-            ret.into_future()
-                .map_err(|e| info!("err {}: {}", line!(), e))
-                .map(|_| ())
+            ret.map_err(|e| info!("err {}: {}", line!(), e)).map(|_| ())
         })
 }
 
-fn pat_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
+fn pat_processor<S, E>(
+    pctx: Arc<Mutex<RefCell<Context>>>,
+    s: S,
+) -> impl Stream<Error = failure::Error>
 where
-    S: Stream<Item = ts::TSPacket>,
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
 {
     psi::Buffer::new(s).and_then(move |bytes| {
         let bytes = &bytes[..];
@@ -227,9 +225,13 @@ where
     })
 }
 
-fn pmt_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
+fn pmt_processor<S, E>(
+    pctx: Arc<Mutex<RefCell<Context>>>,
+    s: S,
+) -> impl Stream<Error = failure::Error>
 where
-    S: Stream<Item = ts::TSPacket>,
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
 {
     psi::Buffer::new(s).and_then(move |bytes| {
         let bytes = &bytes[..];
@@ -266,12 +268,15 @@ where
     })
 }
 
-fn eit_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
+fn eit_processor<S, E>(
+    pctx: Arc<Mutex<RefCell<Context>>>,
+    s: S,
+) -> impl Stream<Error = failure::Error>
 where
-    S: Stream<Item = ts::TSPacket>,
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
 {
     psi::Buffer::new(s).and_then(move |bytes| {
-        info!("eit: ");
         let guard = pctx.lock().unwrap();
         let mut ctx = guard.borrow_mut();
         let bytes = &bytes[..];
@@ -280,7 +285,7 @@ where
             n if 0x4e <= n && n <= 0x6f => {
                 let eit = psi::EventInformationSection::parse(bytes)?;
                 return match ctx.service_id {
-                    Some(id) if id == eit.service_id => Context::process_eit(&mut ctx.events, eit),
+                    Some(id) if id == eit.service_id => process_eit(&mut ctx.events, eit),
                     _ => Ok(()),
                 };
             }
@@ -289,9 +294,13 @@ where
     })
 }
 
-fn sdt_processor<S>(pctx: Arc<Mutex<RefCell<Context>>>, s: S) -> impl Stream<Error = failure::Error>
+fn sdt_processor<S, E>(
+    pctx: Arc<Mutex<RefCell<Context>>>,
+    s: S,
+) -> impl Stream<Error = failure::Error>
 where
-    S: Stream<Item = ts::TSPacket>,
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
 {
     psi::Buffer::new(s).and_then(move |bytes| {
         let guard = pctx.lock().unwrap();
@@ -313,9 +322,10 @@ where
     })
 }
 
-fn pes_processor<S>(s: S) -> impl Stream<Error = failure::Error>
+fn pes_processor<S, E>(s: S) -> impl Stream<Error = failure::Error>
 where
-    S: Stream<Item = ts::TSPacket>,
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
 {
     pes::Buffer::new(s).and_then(move |bytes| {
         match pes::PESPacket::parse(&bytes[..]) {
@@ -339,7 +349,6 @@ fn main() {
     env_logger::init();
 
     tokio::run(lazy(|| {
-        let mut futures = Vec::new();
         let pctx = Arc::new(Mutex::new(RefCell::new(Context::new())));
         {
             let guard = pctx.lock().unwrap();
@@ -347,41 +356,37 @@ fn main() {
 
             // pat
             let (tx, rx) = channel(1);
-            futures.push(tokio::spawn(
+            tokio::spawn(
                 pat_processor(pctx.clone(), rx)
                     .for_each(|_| ok(()))
                     .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-            ));
+            );
             ctx.psi_processors.insert(PAT_PID, tx);
 
             // eit
             for pid in EIT_PIDS.iter() {
                 let (tx, rx) = channel(1);
-                // futures.push(tokio::spawn(
-                //     eit_processor(pctx.clone(), rx)
-                //         .for_each(|_| ok(()))
-                //         .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-                // ));
-                futures.push(tokio::spawn(rx.for_each(|packet: ts::TSPacket| {
-                    info!("eit: {:#}", packet.pid);
-                    Ok(())
-                })));
+                tokio::spawn(
+                    eit_processor(pctx.clone(), rx)
+                        .for_each(|_| ok(()))
+                        .map_err(|e| info!("err {}: {:#?}", line!(), e)),
+                );
                 ctx.psi_processors.insert(*pid, tx);
             }
 
             // sdt
             let (tx, rx) = channel(1);
-            futures.push(tokio::spawn(
+            tokio::spawn(
                 sdt_processor(pctx.clone(), rx)
                     .for_each(|_| ok(()))
                     .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-            ));
+            );
             ctx.psi_processors.insert(psi::SDT_PID, tx);
         }
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        futures.push(tokio::spawn(demux(pctx.clone(), decoder).then(move |_| {
+        demux(pctx.clone(), decoder).then(move |_| {
             let guard = pctx.lock().unwrap();
-            let ctx = guard.borrow();
+            let mut ctx = guard.borrow_mut();
             info!("types: {:#?}", ctx.stream_types);
             info!("descriptors: {:#?}", ctx.descriptors);
             let pids = ctx
@@ -395,16 +400,10 @@ fn main() {
             for e in ctx.events.values() {
                 println!("{}", serde_json::to_string(e).unwrap());
             }
+            // close channels
+            ctx.psi_processors.clear();
+            ctx.pes_processors.clear();
             ok(())
-        })));
-
-        // let (tx, rx) = channel(1);
-        // futures.push(tokio::spawn(tx.send(1).map_err(|_| ()).map(|_| ())));
-        // futures.push(tokio::spawn(rx.for_each(|x| {
-        //     info!("rx {}", x);
-        //     Ok(())
-        // })));
-
-        join_all(futures).map(|_| ())
+        })
     }));
 }
