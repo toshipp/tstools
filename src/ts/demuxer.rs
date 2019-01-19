@@ -1,5 +1,4 @@
 use crate::ts::TSPacket;
-use std::cell::RefCell;
 use std::collections::hash_map::{Entry, HashMap};
 use std::error::Error as StdError;
 use std::fmt::{Display, Error, Formatter};
@@ -23,7 +22,7 @@ impl Inner {
 }
 
 pub struct Register {
-    inner: Arc<Mutex<RefCell<Inner>>>,
+    inner: Arc<Mutex<Inner>>,
 }
 
 #[derive(Debug)]
@@ -31,8 +30,7 @@ pub struct RegistrationError {}
 
 impl Register {
     pub fn try_register(&mut self, pid: u16) -> Result<Receiver<TSPacket>, RegistrationError> {
-        let guard = self.inner.lock().unwrap();
-        let mut inner = guard.borrow_mut();
+        let mut inner = self.inner.lock().unwrap();
         if inner.closed {
             return Err(RegistrationError {});
         }
@@ -56,13 +54,13 @@ impl Clone for Register {
 }
 
 pub struct Demuxer {
-    inner: Arc<Mutex<RefCell<Inner>>>,
+    inner: Arc<Mutex<Inner>>,
 }
 
 impl Demuxer {
     pub fn new() -> Demuxer {
         Demuxer {
-            inner: Arc::new(Mutex::new(RefCell::new(Inner::new()))),
+            inner: Arc::new(Mutex::new(Inner::new())),
         }
     }
 
@@ -98,8 +96,7 @@ impl Sink for Demuxer {
         &mut self,
         item: Self::SinkItem,
     ) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        let guard = self.inner.lock().unwrap();
-        let mut inner = guard.borrow_mut();
+        let mut inner = self.inner.lock().unwrap();
         let pid = item.pid;
         match inner.senders.get_mut(&pid) {
             Some(sender) => sender
@@ -114,8 +111,7 @@ impl Sink for Demuxer {
     }
 
     fn close(&mut self) -> Result<Async<()>, Self::SinkError> {
-        let guard = self.inner.lock().unwrap();
-        let mut inner = guard.borrow_mut();
+        let mut inner = self.inner.lock().unwrap();
         inner.senders.clear();
         inner.closed = true;
         Ok(Async::Ready(()))

@@ -4,7 +4,6 @@ use log::{debug, info};
 use serde_derive::Serialize;
 
 use failure;
-use std::cell::RefCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -13,6 +12,7 @@ use tokio::codec::FramedRead;
 use tokio::io::stdin;
 use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
+use tokio::runtime::Builder;
 
 use chrono::offset::FixedOffset;
 use chrono::{DateTime, Duration};
@@ -157,7 +157,7 @@ fn process_eit(
 }
 
 fn pat_processor<S, E>(
-    pctx: Arc<Mutex<RefCell<Context>>>,
+    pctx: Arc<Mutex<Context>>,
     mut demux_register: ts::demuxer::Register,
     s: S,
 ) -> impl Future<Item = (), Error = ()>
@@ -193,7 +193,7 @@ where
 }
 
 fn pmt_processor<S, E>(
-    pctx: Arc<Mutex<RefCell<Context>>>,
+    pctx: Arc<Mutex<Context>>,
     mut demux_regiser: ts::demuxer::Register,
     s: S,
 ) -> impl Future<Item = (), Error = ()>
@@ -207,8 +207,7 @@ where
             let table_id = bytes[0];
             match table_id {
                 psi::TS_PROGRAM_MAP_SECTION => {
-                    let guard = pctx.lock().unwrap();
-                    let mut ctx = guard.borrow_mut();
+                    let mut ctx = pctx.lock().unwrap();
                     let pms = psi::TSProgramMapSection::parse(bytes)?;
                     debug!("program map section: {:#?}", pms);
                     for si in pms.stream_info.iter() {
@@ -233,18 +232,14 @@ where
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
-fn eit_processor<S, E>(
-    pctx: Arc<Mutex<RefCell<Context>>>,
-    s: S,
-) -> impl Future<Item = (), Error = ()>
+fn eit_processor<S, E>(pctx: Arc<Mutex<Context>>, s: S) -> impl Future<Item = (), Error = ()>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
     E: Debug,
 {
     psi::Buffer::new(s)
         .for_each(move |bytes| {
-            let guard = pctx.lock().unwrap();
-            let mut ctx = guard.borrow_mut();
+            let mut ctx = pctx.lock().unwrap();
             let bytes = &bytes[..];
             let table_id = bytes[0];
             match table_id {
@@ -263,18 +258,14 @@ where
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
-fn sdt_processor<S, E>(
-    pctx: Arc<Mutex<RefCell<Context>>>,
-    s: S,
-) -> impl Future<Item = (), Error = ()>
+fn sdt_processor<S, E>(pctx: Arc<Mutex<Context>>, s: S) -> impl Future<Item = (), Error = ()>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
     E: Debug,
 {
     psi::Buffer::new(s)
         .for_each(move |bytes| {
-            let guard = pctx.lock().unwrap();
-            let mut ctx = guard.borrow_mut();
+            let mut ctx = pctx.lock().unwrap();
             let bytes = &bytes[..];
             let table_id = bytes[0];
             match table_id {
@@ -321,8 +312,9 @@ where
 fn main() {
     env_logger::init();
 
-    tokio::run(lazy(|| {
-        let pctx = Arc::new(Mutex::new(RefCell::new(Context::new())));
+    let mut rt = Builder::new().core_threads(1).build().unwrap();
+    rt.spawn(lazy(|| {
+        let pctx = Arc::new(Mutex::new(Context::new()));
         let demuxer = ts::demuxer::Demuxer::new();
         let mut demux_register = demuxer.register();
         // pat
@@ -348,8 +340,7 @@ fn main() {
 
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
         decoder.forward(demuxer).then(move |_| {
-            let guard = pctx.lock().unwrap();
-            let ctx = guard.borrow();
+            let ctx = pctx.lock().unwrap();
             info!("types: {:#?}", ctx.stream_types);
             info!("descriptors: {:#?}", ctx.descriptors);
             for e in ctx.events.values() {
@@ -358,4 +349,5 @@ fn main() {
             Ok(())
         })
     }));
+    rt.shutdown_on_idle().wait().unwrap();
 }
