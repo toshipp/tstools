@@ -312,8 +312,7 @@ where
 fn main() {
     env_logger::init();
 
-    let mut rt = Builder::new().core_threads(1).build().unwrap();
-    rt.spawn(lazy(|| {
+    let proc = lazy(|| {
         let pctx = Arc::new(Mutex::new(Context::new()));
         let demuxer = ts::demuxer::Demuxer::new();
         let mut demux_register = demuxer.register();
@@ -339,7 +338,10 @@ fn main() {
         ));
 
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        decoder.forward(demuxer).then(move |_| {
+        decoder.forward(demuxer).then(move |ret| {
+            if let Err(e) = ret {
+                info!("err: {}", e);
+            }
             let ctx = pctx.lock().unwrap();
             info!("types: {:#?}", ctx.stream_types);
             info!("descriptors: {:#?}", ctx.descriptors);
@@ -348,6 +350,9 @@ fn main() {
             }
             Ok(())
         })
-    }));
+    });
+
+    let mut rt = Builder::new().core_threads(1).build().unwrap();
+    rt.spawn(proc);
     rt.shutdown_on_idle().wait().unwrap();
 }
