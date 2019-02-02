@@ -42,7 +42,7 @@ impl<'a> ShortEventDescriptor<'a> {
         if tag != 0x4d {
             bail!("invalid tag");
         }
-        let iso_639_language_code = String::from_utf8((&bytes[2..5]).to_vec())?;
+        let iso_639_language_code = String::from_utf8(bytes[2..5].to_vec())?;
         let event_name_length = usize::from(bytes[5]);
         let event_name = AribString(&bytes[6..6 + event_name_length]);
         let text;
