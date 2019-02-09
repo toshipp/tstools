@@ -1,21 +1,24 @@
-use bytes::Bytes;
+use failure::bail;
 use failure::Error;
 
-struct DataGroup {
-    data_group_id: u8,
-    data_group_version: u8,
-    data_group_link_number: u8,
-    last_data_group_link_number: u8,
-    data_group_data: DataGroupData,
-    crc16: u16,
+#[derive(Debug)]
+pub struct DataGroup<'a> {
+    pub data_group_id: u8,
+    pub data_group_version: u8,
+    pub data_group_link_number: u8,
+    pub last_data_group_link_number: u8,
+    pub data_group_data: DataGroupData<'a>,
+    pub crc16: u16,
 }
 
-enum DataGroupData {
-    CaptionManagementData(CaptionManagementData),
-    CaptionData(CaptionData),
+#[derive(Debug)]
+pub enum DataGroupData<'a> {
+    CaptionManagementData(CaptionManagementData<'a>),
+    CaptionData(CaptionData<'a>),
 }
 
-enum TMD {
+#[derive(Debug)]
+pub enum TMD {
     Free,
     RealTime,
     OffsetTime,
@@ -34,7 +37,8 @@ impl TMD {
     }
 }
 
-struct Time {
+#[derive(Debug)]
+pub struct Time {
     h: u8,
     m: u8,
     s: u8,
@@ -55,13 +59,15 @@ impl Time {
     }
 }
 
-struct CaptionManagementData {
-    tmd: TMD,
-    otm: Option<Time>,
-    languages: Vec<Language>,
-    data_unit: DataUnit,
+#[derive(Debug)]
+pub struct CaptionManagementData<'a> {
+    pub tmd: TMD,
+    pub otm: Option<Time>,
+    pub languages: Vec<Language>,
+    pub data_unit: Option<DataUnit<'a>>,
 }
 
+#[derive(Debug)]
 enum TCS {
     Char8,
     UCS,
@@ -79,6 +85,7 @@ impl TCS {
     }
 }
 
+#[derive(Debug)]
 enum RollupMode {
     NonRollup,
     Rollup,
@@ -96,7 +103,8 @@ impl RollupMode {
     }
 }
 
-struct Language {
+#[derive(Debug)]
+pub struct Language {
     language_tag: u8,
     dmf: u8,
     dc: Option<u8>,
@@ -106,7 +114,8 @@ struct Language {
     rollup_mode: RollupMode,
 }
 
-enum DataUnitParameter {
+#[derive(Debug)]
+pub enum DataUnitParameter {
     Text,
     Geometric,
     AdditionalSound,
@@ -132,20 +141,22 @@ impl DataUnitParameter {
     }
 }
 
-struct DataUnit {
-    unit_separator: u8,
-    data_unit_parameter: DataUnitParameter,
-    data_unit_data: Bytes,
+#[derive(Debug)]
+pub struct DataUnit<'a> {
+    pub unit_separator: u8,
+    pub data_unit_parameter: DataUnitParameter,
+    pub data_unit_data: &'a [u8],
 }
 
-struct CaptionData {
-    tmd: TMD,
-    stm: Option<Time>,
-    data_unit: DataUnit,
+#[derive(Debug)]
+pub struct CaptionData<'a> {
+    pub tmd: TMD,
+    pub stm: Option<Time>,
+    pub data_unit: DataUnit<'a>,
 }
 
-impl DataGroup {
-    fn parse(bytes: &[u8]) -> Result<DataGroup, Error> {
+impl<'a> DataGroup<'a> {
+    pub fn parse(bytes: &[u8]) -> Result<DataGroup, Error> {
         let data_group_id = bytes[0] >> 2;
         let data_group_version = bytes[0] & 0x3;
         let data_group_link_number = bytes[1];
@@ -208,7 +219,7 @@ impl Language {
     }
 }
 
-impl CaptionManagementData {
+impl<'a> CaptionManagementData<'a> {
     fn parse(mut bytes: &[u8]) -> Result<CaptionManagementData, Error> {
         let tmd = TMD::from(bytes[0] >> 6);
         let otm = match tmd {
@@ -232,7 +243,10 @@ impl CaptionManagementData {
         }
         let data_unit_loop_length =
             (usize::from(bytes[0]) << 16) | (usize::from(bytes[1]) << 8) | usize::from(bytes[2]);
-        let data_unit = DataUnit::parse(&bytes[3..3 + data_unit_loop_length])?;
+        let data_unit = match data_unit_loop_length {
+            0 => None,
+            _ => Some(DataUnit::parse(&bytes[3..3 + data_unit_loop_length])?),
+        };
         Ok(CaptionManagementData {
             tmd,
             otm,
@@ -242,7 +256,7 @@ impl CaptionManagementData {
     }
 }
 
-impl CaptionData {
+impl<'a> CaptionData<'a> {
     fn parse(mut bytes: &[u8]) -> Result<CaptionData, Error> {
         let tmd = TMD::from(bytes[0] >> 6);
         let stm = match tmd {
@@ -267,13 +281,14 @@ impl CaptionData {
     }
 }
 
-impl DataUnit {
+impl<'a> DataUnit<'a> {
     fn parse(bytes: &[u8]) -> Result<DataUnit, Error> {
+        check_len!(bytes.len(), 5);
         let unit_separator = bytes[0];
         let data_unit_parameter = DataUnitParameter::from(bytes[1]);
         let data_unit_size =
             (usize::from(bytes[2]) << 16) | (usize::from(bytes[3]) << 8) | usize::from(bytes[4]);
-        let data_unit_data = Bytes::from(&bytes[5..5 + data_unit_size]);
+        let data_unit_data = &bytes[5..5 + data_unit_size];
         Ok(DataUnit {
             unit_separator,
             data_unit_parameter,

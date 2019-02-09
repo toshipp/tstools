@@ -1,3 +1,5 @@
+use failure;
+
 use env_logger;
 use log::{debug, info};
 
@@ -16,6 +18,7 @@ use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
 
+use crate::arib;
 use crate::pes;
 use crate::psi;
 use crate::ts;
@@ -91,10 +94,7 @@ where
                     for si in pms.stream_info.iter() {
                         ctx.stream_types.insert(si.stream_type);
                         match si.stream_type {
-                            ts::MPEG2_VIDEO_STREAM
-                            | ts::PES_PRIVATE_STREAM
-                            | ts::ADTS_AUDIO_STREAM
-                            | ts::H264_VIDEO_STREAM => {
+                            psi::STREAM_TYPE_PES_PRIVATE_DATA => {
                                 if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
                                     tokio::spawn(pes_processor(rx));
                                 }
@@ -110,6 +110,41 @@ where
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
+fn sync_caption<'a>(
+    pes: &'a pes::PESPacket,
+) -> Result<arib::caption::DataGroup<'a>, failure::Error> {
+    if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
+        arib::pes::SynchronizedPESData::parse(body.pes_packet_data_byte)
+            .and_then(|data| arib::caption::DataGroup::parse(data.synchronized_pes_data_byte))
+    } else {
+        unreachable!();
+    }
+}
+
+fn async_caption<'a>(
+    pes: &'a pes::PESPacket,
+) -> Result<arib::caption::DataGroup<'a>, failure::Error> {
+    if let pes::PESPacketBody::DataBytes(bytes) = pes.body {
+        arib::pes::AsynchronousPESData::parse(bytes)
+            .and_then(|data| arib::caption::DataGroup::parse(data.asynchronous_pes_data_byte))
+    } else {
+        unreachable!();
+    }
+}
+
+fn get_caption<'a>(
+    pes: &'a pes::PESPacket,
+) -> Result<Option<arib::caption::DataGroup<'a>>, failure::Error> {
+    match pes.stream_id {
+        arib::pes::SYNCHRONIZED_PES_STREAM_ID => sync_caption(pes).map(Some),
+        arib::pes::ASYNCHRONOUS_PES_STREAM_ID => async_caption(pes).map(Some),
+        _ => {
+            info!("unknown pes");
+            Ok(None)
+        }
+    }
+}
+
 fn pes_processor<S, E>(s: S) -> impl Future<Item = (), Error = ()>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
@@ -117,18 +152,29 @@ where
 {
     pes::Buffer::new(s)
         .for_each(move |bytes| {
-            match pes::PESPacket::parse(&bytes[..]) {
-                Ok(pes) => {
-                    if pes.stream_id == 0b10111101 {
-                        // info!("pes private stream1 {:?}", pes);
-                    } else {
-                        debug!("pes {:#?}", pes);
+            if let Err(e) = pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
+                if let Some(dg) = get_caption(&pes)? {
+                    match dg.data_group_data {
+                        arib::caption::DataGroupData::CaptionManagementData(cmd) => {
+                            if let Some(du) = cmd.data_unit {
+                                info!(
+                                    "cmd caption: {}",
+                                    arib::string::decode_to_utf8(du.data_unit_data)?
+                                );
+                            }
+                        }
+                        arib::caption::DataGroupData::CaptionData(cd) => {
+                            info!(
+                                "cd captioon: {}",
+                                arib::string::decode_to_utf8(cd.data_unit.data_unit_data)?
+                            );
+                        }
                     }
                 }
-                Err(e) => {
-                    info!("pes parse error: {:#?}", e);
-                    info!("raw bytes : {:#?}", bytes);
-                }
+                Ok(())
+            }) {
+                info!("pes parse error: {:#?}", e);
+                info!("raw bytes : {:#?}", bytes);
             }
             Ok(())
         })

@@ -6,8 +6,11 @@ use std::char;
 use std::error;
 use std::fmt;
 
-pub fn decode_to_utf8<'a, I: Iterator<Item = &'a u8>>(iter: I) -> Result<String, Error> {
-    AribDecoder::new().decode(iter)
+pub fn decode_to_utf8<'a, I>(iter: I) -> Result<String, Error>
+where
+    I: IntoIterator<Item = &'a u8>,
+{
+    AribDecoder::new().decode(iter.into_iter())
 }
 
 #[derive(Copy, Clone)]

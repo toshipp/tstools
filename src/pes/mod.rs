@@ -14,11 +14,11 @@ const ITU_T_REC_H_222_1_TYPE_E_STREAM: u8 = 0b11111000;
 const PADDING_STREAM: u8 = 0b10111110;
 
 #[derive(Debug)]
-struct Todo {}
+pub struct Todo {}
 
 type DSMTrickMode = Todo;
 #[derive(Debug)]
-struct ESCR {
+pub struct ESCR {
     base: u64,
     extension: u16,
 }
@@ -31,32 +31,32 @@ pub struct PESPacket<'a> {
 }
 
 #[derive(Debug)]
-struct PESPacketExtension<'a> {
-    pes_private_data: Option<&'a [u8]>,
-    pack_header: Option<&'a [u8]>,
-    program_packet_sequence_counter: Option<u8>,
-    mpeg1_mpeg2_identifier: Option<u8>,
-    original_stuff_length: Option<u8>,
-    p_std_buffer_scale: Option<u8>,
-    p_std_buffer_size: Option<u16>,
+pub struct PESPacketExtension<'a> {
+    pub pes_private_data: Option<&'a [u8]>,
+    pub pack_header: Option<&'a [u8]>,
+    pub program_packet_sequence_counter: Option<u8>,
+    pub mpeg1_mpeg2_identifier: Option<u8>,
+    pub original_stuff_length: Option<u8>,
+    pub p_std_buffer_scale: Option<u8>,
+    pub p_std_buffer_size: Option<u16>,
 }
 
 #[derive(Debug)]
 pub struct NormalPESPacketBody<'a> {
-    pes_scrambling_control: u8,
-    pes_priority: u8,
-    data_alignment_indicator: u8,
-    copyright: u8,
-    original_or_copy: u8,
-    pts: Option<u64>,
-    dts: Option<u64>,
-    escr: Option<ESCR>,
-    es_rate: Option<u32>,
-    dsm_trick_mode: Option<DSMTrickMode>,
-    additional_copy_info: Option<u8>,
-    previous_pes_packet_crc: Option<u16>,
-    pes_extension: Option<PESPacketExtension<'a>>,
-    pes_packet_data_byte: &'a [u8],
+    pub pes_scrambling_control: u8,
+    pub pes_priority: u8,
+    pub data_alignment_indicator: u8,
+    pub copyright: u8,
+    pub original_or_copy: u8,
+    pub pts: Option<u64>,
+    pub dts: Option<u64>,
+    pub escr: Option<ESCR>,
+    pub es_rate: Option<u32>,
+    pub dsm_trick_mode: Option<DSMTrickMode>,
+    pub additional_copy_info: Option<u8>,
+    pub previous_pes_packet_crc: Option<u16>,
+    pub pes_extension: Option<PESPacketExtension<'a>>,
+    pub pes_packet_data_byte: &'a [u8],
 }
 
 #[derive(Debug)]
