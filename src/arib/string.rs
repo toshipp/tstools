@@ -196,6 +196,9 @@ const SS3: u8 = 0x1d;
 // same as CR.
 const APR: u8 = 0xd;
 
+// clear screen
+const CS: u8 = 0xc;
+
 // 1byte parameter
 const PAPF: u8 = 0x16;
 const APS: u8 = 0x1c;
@@ -337,8 +340,9 @@ impl AribDecoder {
                     APR => {
                         out.push('\r');
                     }
+                    CS => {}
                     _ => {
-                        info!("c0 {}", s0);
+                        info!("c0 {:x}", s0);
                     }
                 }
             }
@@ -354,14 +358,25 @@ impl AribDecoder {
                             s.next();
                         }
                     }
-                    TIME | MACRO | CSI => {
+                    TIME | MACRO => {
                         unimplemented!();
+                    }
+                    CSI => {
+                        let mut seq = Vec::new();
+                        loop {
+                            let c = next!();
+                            seq.push(c);
+                            if c >= 0x40 {
+                                break;
+                            }
+                        }
+                        info!("CSI {:?}", seq);
                     }
                     SSZ | MSZ | NSZ => {
                         // ignore font size change
                     }
                     _ => {
-                        info!("c1 {}", s0);
+                        info!("c1 {:x}", s0);
                     }
                 }
             }

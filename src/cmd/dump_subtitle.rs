@@ -154,6 +154,7 @@ where
         .for_each(move |bytes| {
             if let Err(e) = pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
                 if let Some(dg) = get_caption(&pes)? {
+                    debug!("cap {:?}", dg);
                     match dg.data_group_data {
                         arib::caption::DataGroupData::CaptionManagementData(cmd) => {
                             if let Some(du) = cmd.data_unit {
