@@ -67,8 +67,9 @@ impl Charset {
         match self {
             Charset::Kanji | Charset::JISGokanKanji1 => {
                 let code_point = 0x10000 | (u32::from(next!()) << 8) | u32::from(next!());
-                let chars = jisx0213::code_point_to_chars(code_point)
-                    .ok_or(format_err!("unknown cp: {:x}", code_point))?;
+                // let chars = jisx0213::code_point_to_chars(code_point)
+                //     .ok_or(format_err!("unknown cp: {:x}", code_point))?;
+                let chars = jisx0213::code_point_to_chars(code_point).unwrap_or(&[]);
                 out.extend(chars);
             }
             Charset::Alnum | Charset::ProportionalAlnum => out.push(char::from(next!())),
@@ -358,8 +359,28 @@ impl AribDecoder {
                             s.next();
                         }
                     }
-                    TIME | MACRO => {
+                    MACRO => {
                         unimplemented!();
+                    }
+                    TIME => {
+                        let mut seq = Vec::new();
+                        match next!() {
+                            0x20 | 0x28 => {
+                                seq.push(next!());
+                            }
+                            0x29 => {
+                                // toodo
+                                loop {
+                                    let c = next!();
+                                    seq.push(c);
+                                    if c >= 0x40 {
+                                        break;
+                                    }
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                        info!("TIME {:?}", seq);
                     }
                     CSI => {
                         let mut seq = Vec::new();

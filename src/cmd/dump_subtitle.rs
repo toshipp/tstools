@@ -95,8 +95,10 @@ where
                         ctx.stream_types.insert(si.stream_type);
                         match si.stream_type {
                             psi::STREAM_TYPE_PES_PRIVATE_DATA => {
-                                if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
-                                    tokio::spawn(pes_processor(rx));
+                                if si.elementary_pid != 340 {
+                                    if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
+                                        tokio::spawn(pes_processor(rx, si.elementary_pid));
+                                    }
                                 }
                             }
                             _ => {}
@@ -145,7 +147,43 @@ fn get_caption<'a>(
     }
 }
 
-fn pes_processor<S, E>(s: S) -> impl Future<Item = (), Error = ()>
+fn caption<'a>(
+    data_units: &Vec<arib::caption::DataUnit<'a>>,
+    ln: u32,
+) -> Result<(), failure::Error> {
+    info!("cap len: {}", data_units.len());
+    /*
+    for du in data_units {
+        info!(
+            "caption {}: {}",
+            ln,
+            arib::string::decode_to_utf8(du.data_unit_data)?
+        )
+    }
+     */
+    match arib::string::decode_to_utf8(data_units.iter().map(|du| du.data_unit_data).flatten()) {
+        Ok(caption) => {
+            info!("caption {}: {}", ln, caption);
+        }
+        Err(e) => {
+            info!(
+                "err: {:?}",
+                data_units
+                    .iter()
+                    .map(|du| du.data_unit_data)
+                    .flatten()
+                    .collect::<Vec<&u8>>()
+            );
+            return Err(e);
+        }
+    }
+    for du in data_units {
+        info!("param: {:?}", du.data_unit_parameter);
+    }
+    Ok(())
+}
+
+fn pes_processor<S, E>(s: S, pid: u16) -> impl Future<Item = (), Error = ()>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
     E: Debug,
@@ -154,21 +192,13 @@ where
         .for_each(move |bytes| {
             if let Err(e) = pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
                 if let Some(dg) = get_caption(&pes)? {
-                    debug!("cap {:?}", dg);
+                    info!("pid: {}", pid);
                     match dg.data_group_data {
                         arib::caption::DataGroupData::CaptionManagementData(cmd) => {
-                            if let Some(du) = cmd.data_unit {
-                                info!(
-                                    "cmd caption: {}",
-                                    arib::string::decode_to_utf8(du.data_unit_data)?
-                                );
-                            }
+                            caption(&cmd.data_units, line!())?;
                         }
                         arib::caption::DataGroupData::CaptionData(cd) => {
-                            info!(
-                                "cd captioon: {}",
-                                arib::string::decode_to_utf8(cd.data_unit.data_unit_data)?
-                            );
+                            caption(&cd.data_units, line!())?;
                         }
                     }
                 }

@@ -64,7 +64,7 @@ pub struct CaptionManagementData<'a> {
     pub tmd: TMD,
     pub otm: Option<Time>,
     pub languages: Vec<Language>,
-    pub data_unit: Option<DataUnit<'a>>,
+    pub data_units: Vec<DataUnit<'a>>,
 }
 
 #[derive(Debug)]
@@ -152,7 +152,7 @@ pub struct DataUnit<'a> {
 pub struct CaptionData<'a> {
     pub tmd: TMD,
     pub stm: Option<Time>,
-    pub data_unit: DataUnit<'a>,
+    pub data_units: Vec<DataUnit<'a>>,
 }
 
 impl<'a> DataGroup<'a> {
@@ -243,15 +243,20 @@ impl<'a> CaptionManagementData<'a> {
         }
         let data_unit_loop_length =
             (usize::from(bytes[0]) << 16) | (usize::from(bytes[1]) << 8) | usize::from(bytes[2]);
-        let data_unit = match data_unit_loop_length {
-            0 => None,
-            _ => Some(DataUnit::parse(&bytes[3..3 + data_unit_loop_length])?),
-        };
+        let mut data_units = Vec::new();
+        {
+            let mut bytes = &bytes[3..3 + data_unit_loop_length];
+            while bytes.len() > 0 {
+                let (du, n) = DataUnit::parse(bytes)?;
+                data_units.push(du);
+                bytes = &bytes[n..];
+            }
+        }
         Ok(CaptionManagementData {
             tmd,
             otm,
             languages,
-            data_unit,
+            data_units,
         })
     }
 }
@@ -272,27 +277,38 @@ impl<'a> CaptionData<'a> {
         };
         let data_unit_loop_length =
             (usize::from(bytes[0]) << 16) | (usize::from(bytes[1]) << 8) | usize::from(bytes[2]);
-        let data_unit = DataUnit::parse(&bytes[3..3 + data_unit_loop_length])?;
+        let mut data_units = Vec::new();
+        {
+            let mut bytes = &bytes[3..3 + data_unit_loop_length];
+            while bytes.len() > 0 {
+                let (du, n) = DataUnit::parse(bytes)?;
+                data_units.push(du);
+                bytes = &bytes[n..];
+            }
+        }
         Ok(CaptionData {
             tmd,
             stm,
-            data_unit,
+            data_units,
         })
     }
 }
 
 impl<'a> DataUnit<'a> {
-    fn parse(bytes: &[u8]) -> Result<DataUnit, Error> {
+    fn parse(bytes: &[u8]) -> Result<(DataUnit, usize), Error> {
         check_len!(bytes.len(), 5);
         let unit_separator = bytes[0];
         let data_unit_parameter = DataUnitParameter::from(bytes[1]);
         let data_unit_size =
             (usize::from(bytes[2]) << 16) | (usize::from(bytes[3]) << 8) | usize::from(bytes[4]);
         let data_unit_data = &bytes[5..5 + data_unit_size];
-        Ok(DataUnit {
-            unit_separator,
-            data_unit_parameter,
-            data_unit_data,
-        })
+        Ok((
+            DataUnit {
+                unit_separator,
+                data_unit_parameter,
+                data_unit_data,
+            },
+            5 + data_unit_size,
+        ))
     }
 }
