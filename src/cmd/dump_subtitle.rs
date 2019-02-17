@@ -73,6 +73,20 @@ where
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
+fn is_caption_component(desc: &psi::Descriptor) -> bool {
+    if let psi::Descriptor::StreamIdentifierDescriptor(sid) = desc {
+        return arib::caption::is_non_partial_reception_caption(sid.component_tag);
+    }
+    false
+}
+
+fn is_caption(si: &psi::StreamInfo) -> bool {
+    if si.stream_type == psi::STREAM_TYPE_PES_PRIVATE_DATA {
+        return si.descriptors.iter().any(is_caption_component);
+    }
+    false
+}
+
 fn pmt_processor<S, E>(
     pctx: Arc<Mutex<Context>>,
     mut demux_regiser: ts::demuxer::Register,
@@ -93,16 +107,11 @@ where
                     debug!("program map section: {:#?}", pms);
                     for si in pms.stream_info.iter() {
                         ctx.stream_types.insert(si.stream_type);
-                        match si.stream_type {
-                            psi::STREAM_TYPE_PES_PRIVATE_DATA => {
-                                if si.elementary_pid != 340 {
-                                    if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
-                                        tokio::spawn(pes_processor(rx, si.elementary_pid));
-                                    }
-                                }
+                        if is_caption(&si) {
+                            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
+                                tokio::spawn(pes_processor(rx, si.elementary_pid));
                             }
-                            _ => {}
-                        };
+                        }
                     }
                 }
                 _ => unreachable!(),

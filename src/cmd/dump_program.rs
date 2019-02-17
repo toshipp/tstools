@@ -93,7 +93,7 @@ fn process_eit(
         let mut items = Vec::new();
         for desc in event.descriptors.iter() {
             match desc {
-                psi::Descriptor::ExtendedEvent(e) => {
+                psi::Descriptor::ExtendedEventDescriptor(e) => {
                     for item in e.items.iter() {
                         if !item.item_description.is_empty() {
                             let d =
@@ -109,11 +109,11 @@ fn process_eit(
                         items.push(item.item);
                     }
                 }
-                psi::Descriptor::ShortEvent(e) => {
+                psi::Descriptor::ShortEventDescriptor(e) => {
                     record.title = format!("{:?}", e.event_name);
                     record.summary = format!("{:?}", e.text);
                 }
-                psi::Descriptor::Content(c) => {
+                psi::Descriptor::ContentDescriptor(c) => {
                     if record.category.is_empty() && !c.items.is_empty() {
                         record.category = format!("{:?}", c.items[0]);
                     }

@@ -23,9 +23,10 @@ impl<'a> fmt::Debug for AribString<'a> {
 
 #[derive(Debug)]
 pub enum Descriptor<'a> {
-    ShortEvent(ShortEventDescriptor<'a>),
-    ExtendedEvent(ExtendedEventDescriptor<'a>),
-    Content(ContentDescriptor),
+    ShortEventDescriptor(ShortEventDescriptor<'a>),
+    ExtendedEventDescriptor(ExtendedEventDescriptor<'a>),
+    ContentDescriptor(ContentDescriptor),
+    StreamIdentifierDescriptor(StreamIdentifierDescriptor),
     Unsupported(UnsupportedDescriptor<'a>),
 }
 
@@ -216,6 +217,22 @@ impl ContentDescriptor {
 }
 
 #[derive(Debug)]
+pub struct StreamIdentifierDescriptor {
+    pub component_tag: u8,
+}
+
+impl StreamIdentifierDescriptor {
+    fn parse(bytes: &[u8]) -> Result<StreamIdentifierDescriptor, Error> {
+        let tag = bytes[0];
+        if tag != 0x52 {
+            bail!("invalid tag");
+        }
+        let component_tag = bytes[2];
+        Ok(StreamIdentifierDescriptor { component_tag })
+    }
+}
+
+#[derive(Debug)]
 pub struct UnsupportedDescriptor<'a> {
     pub descriptor_tag: u8,
     pub data: &'a [u8],
@@ -238,9 +255,12 @@ impl<'a> Descriptor<'a> {
         let descriptor_tag = bytes[0];
         let descriptor_length = usize::from(bytes[1]);
         let descriptor = match descriptor_tag {
-            0x4d => Descriptor::ShortEvent(ShortEventDescriptor::parse(bytes)?),
-            0x4e => Descriptor::ExtendedEvent(ExtendedEventDescriptor::parse(bytes)?),
-            0x54 => Descriptor::Content(ContentDescriptor::parse(bytes)?),
+            0x4d => Descriptor::ShortEventDescriptor(ShortEventDescriptor::parse(bytes)?),
+            0x4e => Descriptor::ExtendedEventDescriptor(ExtendedEventDescriptor::parse(bytes)?),
+            0x54 => Descriptor::ContentDescriptor(ContentDescriptor::parse(bytes)?),
+            0x52 => {
+                Descriptor::StreamIdentifierDescriptor(StreamIdentifierDescriptor::parse(bytes)?)
+            }
             _ => Descriptor::Unsupported(UnsupportedDescriptor::parse(bytes)?),
         };
         return Ok((descriptor, descriptor_length + 2));
