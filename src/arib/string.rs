@@ -202,6 +202,8 @@ const CS: u8 = 0xc;
 
 // 1byte parameter
 const PAPF: u8 = 0x16;
+
+// 2 byte parameter
 const APS: u8 = 0x1c;
 
 // leading byte is 0x20, it takes more 1 byte.
@@ -209,21 +211,20 @@ const COL: u8 = 0x90;
 
 // 1byte pearameter
 const POL: u8 = 0x93;
-
 const SZX: u8 = 0x8b;
 const FLC: u8 = 0x91;
+const WMM: u8 = 0x94;
+const RPC: u8 = 0x98;
+const HLC: u8 = 0x97;
 
 // leading byte is 0x20, it takes more 1 byte.
 const CDC: u8 = 0x92;
 
-const WMM: u8 = 0x94;
-
 // 2 byte params
 const TIME: u8 = 0x9d;
 
+// todo
 const MACRO: u8 = 0x95;
-const RPC: u8 = 0x98;
-const HLC: u8 = 0x97;
 const CSI: u8 = 0x9b;
 
 // set font size to small, middle or normal, accordingly.
@@ -335,7 +336,11 @@ impl AribDecoder {
             0x00..=0x1f => {
                 // c0
                 match s0 {
-                    PAPF | APS => {
+                    PAPF => {
+                        s.next();
+                    }
+                    APS => {
+                        s.next();
                         s.next();
                     }
                     APR => {
@@ -354,10 +359,13 @@ impl AribDecoder {
             0x80..=0x9f => {
                 // c1
                 match s0 {
-                    COL | POL | SZX | FLC | CDC | WMM | RPC | HLC => {
+                    COL | CDC => {
                         if next!() == 0x20 {
                             s.next();
                         }
+                    }
+                    POL | SZX | FLC | WMM | RPC | HLC => {
+                        s.next();
                     }
                     MACRO => {
                         unimplemented!();
