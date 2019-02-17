@@ -67,9 +67,8 @@ impl Charset {
         match self {
             Charset::Kanji | Charset::JISGokanKanji1 => {
                 let code_point = 0x10000 | (u32::from(next!()) << 8) | u32::from(next!());
-                // let chars = jisx0213::code_point_to_chars(code_point)
-                //     .ok_or(format_err!("unknown cp: {:x}", code_point))?;
-                let chars = jisx0213::code_point_to_chars(code_point).unwrap_or(&[]);
+                let chars = jisx0213::code_point_to_chars(code_point)
+                    .ok_or(format_err!("unknown cp: {:x}", code_point))?;
                 out.extend(chars);
             }
             Charset::Alnum | Charset::ProportionalAlnum => out.push(char::from(next!())),
