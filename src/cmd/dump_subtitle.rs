@@ -163,12 +163,11 @@ fn caption<'a>(
     if !data_units.is_empty() {
         info!("cap len: {}", data_units.len());
         for du in data_units {
-            info!(
-                "{}: caption({:?}): {}",
-                ln,
-                du.data_unit_parameter,
-                arib::string::decode_to_utf8(du.data_unit_data)?
-            )
+            let caption = arib::string::decode_to_utf8(du.data_unit_data)?;
+            if !caption.is_empty() {
+                println!("{}: caption({:?}): {}", ln, du.data_unit_parameter, caption);
+                println!("raw {:?}", du.data_unit_data);
+            }
         }
     }
     Ok(())

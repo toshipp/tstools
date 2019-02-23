@@ -1,7 +1,7 @@
 use super::symbol;
 use failure::format_err;
 use failure::Error;
-use log::info;
+use log::debug;
 use std::char;
 use std::error;
 use std::fmt;
@@ -117,7 +117,7 @@ impl Charset {
                 let cp = (u16::from(next!()) << 8) | u16::from(next!());
                 match symbol::to_char(cp) {
                     Some(c) => out.push(c),
-                    None => info!("unsupported symbol {:x}", cp),
+                    None => debug!("unsupported symbol {:x}", cp),
                 }
             }
             Charset::DRCS(_n) => unimplemented!(),
@@ -182,54 +182,61 @@ struct AribDecoder {
     g: [Charset; 4],
 }
 
-const ESC: u8 = 0x1b;
-const LS0: u8 = 0xf;
-const LS1: u8 = 0xe;
+// escape sequence
 const LS2: u8 = 0x6e;
 const LS3: u8 = 0x6f;
 const LS1R: u8 = 0x7e;
 const LS2R: u8 = 0x7d;
 const LS3R: u8 = 0x7c;
-const SS2: u8 = 0x19;
-const SS3: u8 = 0x1d;
 
-// same as CR.
-const APR: u8 = 0xd;
-
-// clear screen
+// C0
+const NUL: u8 = 0x0;
+const BEL: u8 = 0x7;
+const APB: u8 = 0x8;
+const APF: u8 = 0x9;
+const APD: u8 = 0xa;
+const APU: u8 = 0xb;
 const CS: u8 = 0xc;
-
-// 1byte parameter
+const APR: u8 = 0xd;
+const LS1: u8 = 0xe;
+const LS0: u8 = 0xf;
 const PAPF: u8 = 0x16;
-
-// 2 byte parameter
+const CAN: u8 = 0x18;
+const SS2: u8 = 0x19;
+const ESC: u8 = 0x1b;
 const APS: u8 = 0x1c;
+const SS3: u8 = 0x1d;
+const RS: u8 = 0x1e;
+const US: u8 = 0x1f;
 
-// leading byte is 0x20, it takes more 1 byte.
-const COL: u8 = 0x90;
+const SP: u8 = 0x20;
+const DEL: u8 = 0x7f;
 
-// 1byte pearameter
-const POL: u8 = 0x93;
+// C1
+const BKF: u8 = 0x80;
+const RDF: u8 = 0x81;
+const GRF: u8 = 0x82;
+const YLF: u8 = 0x83;
+const BLF: u8 = 0x84;
+const MGF: u8 = 0x85;
+const CNF: u8 = 0x86;
+const WHF: u8 = 0x87;
+const SSZ: u8 = 0x88; // font size small
+const MSZ: u8 = 0x89; // font size middle
+const NSZ: u8 = 0x8a; // font size normal
 const SZX: u8 = 0x8b;
+const COL: u8 = 0x90;
 const FLC: u8 = 0x91;
-const WMM: u8 = 0x94;
-const RPC: u8 = 0x98;
-const HLC: u8 = 0x97;
-
-// leading byte is 0x20, it takes more 1 byte.
 const CDC: u8 = 0x92;
-
-// 2 byte params
-const TIME: u8 = 0x9d;
-
-// todo
+const POL: u8 = 0x93;
+const WMM: u8 = 0x94;
 const MACRO: u8 = 0x95;
+const HLC: u8 = 0x97;
+const RPC: u8 = 0x98;
+const SPL: u8 = 0x99;
+const STL: u8 = 0x9a;
 const CSI: u8 = 0x9b;
-
-// set font size to small, middle or normal, accordingly.
-const SSZ: u8 = 0x88;
-const MSZ: u8 = 0x89;
-const NSZ: u8 = 0x8a;
+const TIME: u8 = 0x9d;
 
 impl AribDecoder {
     fn new() -> AribDecoder {
@@ -250,7 +257,7 @@ impl AribDecoder {
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
             if self.is_control(b) {
-                self.set_state(&mut iter, &mut string)?
+                self.control(&mut iter, &mut string)?
             } else {
                 let charset = if b < 0x80 { &mut self.gl } else { &mut self.gr };
                 let mut iter = (&mut iter).map(move |x| x & 0x7f);
@@ -265,7 +272,7 @@ impl AribDecoder {
         lo <= 0x20 || lo == 0x7f
     }
 
-    fn set_state<I: Iterator<Item = u8>>(
+    fn control<I: Iterator<Item = u8>>(
         &mut self,
         s: &mut I,
         out: &mut String,
@@ -275,8 +282,20 @@ impl AribDecoder {
                 s.next().ok_or(AribDecodeError {})?
             };
         }
+        macro_rules! param1or2 {
+            () => {{
+                let mut v = Vec::new();
+                let c = next!();
+                v.push(c);
+                if c == 0x20 {
+                    v.push(next!());
+                }
+                v
+            }};
+        }
         let s0 = next!();
         match s0 {
+            // invocation and designation
             LS0 => self.gl.lock(self.g[0]),
             LS1 => self.gl.lock(self.g[1]),
             ESC => {
@@ -332,88 +351,137 @@ impl AribDecoder {
             }
             SS2 => self.gl.single(self.g[2]),
             SS3 => self.gl.single(self.g[3]),
-            0x00..=0x1f => {
-                // c0
-                match s0 {
-                    PAPF => {
-                        s.next();
-                    }
-                    APS => {
-                        s.next();
-                        s.next();
-                    }
-                    APR => {
-                        out.push('\r');
-                    }
-                    CS => {}
-                    _ => {
-                        info!("c0 {:x}", s0);
-                    }
+
+            // C0
+            NUL => {
+                out.push('\0');
+            }
+            BEL => {
+                out.push('\x07');
+            }
+            APB => {
+                // retract cursor
+                out.push('\x08');
+            }
+            APF => {
+                debug!("APF");
+                // advance cursor
+                out.push('\t');
+            }
+            APD => {
+                // down cursor
+                out.push('\n');
+            }
+            APU => {
+                // up cursor
+                debug!("up cursor");
+            }
+            APR => {
+                out.push('\r');
+            }
+            PAPF => {
+                let x = next!();
+                debug!("PAPF {}", x);
+                for _ in 0..x {
+                    out.push('\t');
                 }
             }
-            0x20 => out.push(' '),
-            0x7f => {
-                // DEL
+            APS => {
+                let x = next!();
+                let y = next!();
+                debug!("APS {} {}", x, y);
+                // todo
+                out.push('\n');
             }
-            0x80..=0x9f => {
-                // c1
-                match s0 {
-                    COL | CDC => {
-                        if next!() == 0x20 {
-                            s.next();
+            CS => {
+                debug!("clear display");
+            }
+            CAN => {
+                debug!("cancel");
+            }
+            RS => {
+                debug!("begin data header");
+            }
+            US => {
+                debug!("begin data unit");
+            }
+            SP => out.push(' '),
+            DEL => {
+                debug!("del");
+            }
+
+            // C1
+            BKF | RDF | GRF | YLF | BLF | MGF | CNF | WHF => {
+                debug!("color: {}", s0);
+            }
+            COL => {
+                debug!("COL {:?}", param1or2!());
+            }
+            POL => {
+                debug!("POL {}", next!());
+            }
+            SSZ | MSZ | NSZ => {
+                debug!("font size: {}", s0);
+            }
+            SZX => {
+                debug!("font size param: {}", next!());
+            }
+            FLC => {
+                debug!("FLC {}", next!());
+            }
+            CDC => {
+                debug!("CDC {:?}", param1or2!());
+            }
+            WMM => {
+                debug!("WMM {:?}", next!());
+            }
+            TIME => {
+                let mut seq = Vec::new();
+                let c = next!();
+                seq.push(c);
+                match c {
+                    0x20 | 0x28 => {
+                        seq.push(next!());
+                    }
+                    0x29 => loop {
+                        let c = next!();
+                        seq.push(c);
+                        if c >= 0x40 {
+                            break;
                         }
-                    }
-                    POL | SZX | FLC | WMM | RPC | HLC => {
-                        s.next();
-                    }
-                    MACRO => {
-                        unimplemented!();
-                    }
-                    TIME => {
-                        let mut seq = Vec::new();
-                        match next!() {
-                            0x20 | 0x28 => {
-                                seq.push(next!());
-                            }
-                            0x29 => {
-                                // toodo
-                                loop {
-                                    let c = next!();
-                                    seq.push(c);
-                                    if c >= 0x40 {
-                                        break;
-                                    }
-                                }
-                            }
-                            _ => unreachable!(),
-                        }
-                        info!("TIME {:?}", seq);
-                    }
-                    CSI => {
-                        let mut seq = Vec::new();
-                        loop {
-                            let c = next!();
-                            seq.push(c);
-                            if c >= 0x40 {
-                                break;
-                            }
-                        }
-                        info!("CSI {:?}", seq);
-                    }
-                    SSZ | MSZ | NSZ => {
-                        // ignore font size change
-                    }
-                    _ => {
-                        info!("c1 {:x}", s0);
+                    },
+                    _ => unreachable!(),
+                }
+                debug!("TIME {:?}", seq);
+            }
+            MACRO => {
+                unimplemented!();
+            }
+            RPC => {
+                unimplemented!();
+            }
+            STL | SPL => {
+                unimplemented!();
+            }
+            HLC => {
+                debug!("HLC {}", next!());
+            }
+            CSI => {
+                let mut seq = Vec::new();
+                loop {
+                    let c = next!();
+                    seq.push(c);
+                    if c >= 0x40 {
+                        break;
                     }
                 }
+                debug!("CSI {:?}", seq);
             }
             0xa0 => {}
             0xff => {}
-            _ => {
-                // non control
-                unreachable!()
-            }
+
+            // non control
+            _ => unreachable!(),
         }
         Ok(())
     }
