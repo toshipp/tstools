@@ -5,7 +5,8 @@ authors = ["toshi_pp <toshiq2@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-failure = "0.1.1"
+failure = "0.1.5"
+failure_derive = "0.1.5"
 lazy_static = "1.1.0"
 log = "0.4"
 env_logger = "0.5.13"

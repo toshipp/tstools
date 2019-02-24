@@ -1,7 +1,7 @@
 use failure;
 
 use env_logger;
-use log::{debug, info};
+use log::{debug, info, trace};
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -104,7 +104,7 @@ where
                 psi::TS_PROGRAM_MAP_SECTION => {
                     let mut ctx = pctx.lock().unwrap();
                     let pms = psi::TSProgramMapSection::parse(bytes)?;
-                    debug!("program map section: {:#?}", pms);
+                    trace!("program map section: {:#?}", pms);
                     for si in pms.stream_info.iter() {
                         ctx.stream_types.insert(si.stream_type);
                         if is_caption(&si) {
@@ -166,7 +166,7 @@ fn caption<'a>(
             let caption = arib::string::decode_to_utf8(du.data_unit_data)?;
             if !caption.is_empty() {
                 println!("{}: caption({:?}): {}", ln, du.data_unit_parameter, caption);
-                println!("raw {:?}", du.data_unit_data);
+                debug!("raw {:?}", du.data_unit_data);
             }
         }
     }
@@ -188,6 +188,7 @@ where
                         }
                         arib::caption::DataGroupData::CaptionData(cd) => {
                             caption(&cd.data_units, line!())?;
+                            debug!("bytes: {:?}", bytes);
                         }
                     }
                 }

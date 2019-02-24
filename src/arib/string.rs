@@ -1,12 +1,10 @@
 use super::symbol;
-use failure::format_err;
-use failure::Error;
+use failure;
+use failure_derive::Fail;
 use log::debug;
 use std::char;
-use std::error;
-use std::fmt;
 
-pub fn decode_to_utf8<'a, I>(iter: I) -> Result<String, Error>
+pub fn decode_to_utf8<'a, I>(iter: I) -> Result<String, failure::Error>
 where
     I: IntoIterator<Item = &'a u8>,
 {
@@ -58,17 +56,35 @@ impl Charset {
         }
     }
 
-    fn decode<I: Iterator<Item = u8>>(&self, iter: &mut I, out: &mut String) -> Result<(), Error> {
+    fn decode<I: Iterator<Item = u8>>(
+        &self,
+        iter: &mut I,
+        out: &mut String,
+    ) -> Result<(), failure::Error> {
         macro_rules! next {
             () => {
-                iter.next().ok_or(AribDecodeError {})?
+                iter.next().ok_or(Error::MalformedShortBytes)?
             };
         }
         match self {
-            Charset::Kanji | Charset::JISGokanKanji1 => {
+            Charset::Kanji => {
+                let code_point = (u16::from(next!()) << 8) | u16::from(next!());
+                if code_point < 0x7500 {
+                    let code_point = 0x10000 | u32::from(code_point);
+                    let chars = jisx0213::code_point_to_chars(code_point)
+                        .ok_or(Error::UnknownCodepoint(code_point))?;
+                    out.extend(chars);
+                } else {
+                    out.push(
+                        symbol::to_char(code_point)
+                            .ok_or(Error::UnknownCodepoint(code_point as u32))?,
+                    );
+                }
+            }
+            Charset::JISGokanKanji1 => {
                 let code_point = 0x10000 | (u32::from(next!()) << 8) | u32::from(next!());
                 let chars = jisx0213::code_point_to_chars(code_point)
-                    .ok_or(format_err!("unknown cp: {:x}", code_point))?;
+                    .ok_or(Error::UnknownCodepoint(code_point))?;
                 out.extend(chars);
             }
             Charset::Alnum | Charset::ProportionalAlnum => out.push(char::from(next!())),
@@ -103,7 +119,7 @@ impl Charset {
                 out.push(unsafe { char::from_u32_unchecked(c) });
             }
             Charset::MosaicA | Charset::MosaicB | Charset::MosaicC | Charset::MosaicD => {
-                unimplemented!()
+                return Err(Error::Unimplemented.into());
             }
             Charset::JISX0201 => {
                 let c = 0xff61 + u32::from(next!()) - 0x21;
@@ -111,37 +127,31 @@ impl Charset {
             }
             Charset::JISGokanKanji2 => {
                 let code_point = 0x20000 | (u32::from(next!()) << 8) | u32::from(next!());
-                out.extend(jisx0213::code_point_to_chars(code_point).ok_or(AribDecodeError {})?);
+                out.extend(
+                    jisx0213::code_point_to_chars(code_point)
+                        .ok_or(Error::UnknownCodepoint(code_point))?,
+                );
             }
             Charset::Symbol => {
                 let cp = (u16::from(next!()) << 8) | u16::from(next!());
-                match symbol::to_char(cp) {
-                    Some(c) => out.push(c),
-                    None => debug!("unsupported symbol {:x}", cp),
-                }
+                out.push(symbol::to_char(cp).ok_or(Error::UnknownCodepoint(cp as u32))?);
             }
-            Charset::DRCS(_n) => unimplemented!(),
-            Charset::Macro => unimplemented!(),
+            Charset::DRCS(_n) => return Err(Error::Unimplemented.into()),
+            Charset::Macro => return Err(Error::Unimplemented.into()),
         }
         Ok(())
     }
 }
 
-struct AribDecodeError {}
-
-impl fmt::Display for AribDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "decode failed")
-    }
+#[derive(Debug, Fail)]
+enum Error {
+    #[fail(display = "unknown code point: {:x}", 0)]
+    UnknownCodepoint(u32),
+    #[fail(display = "unimplemented")]
+    Unimplemented,
+    #[fail(display = "malformed short bytes")]
+    MalformedShortBytes,
 }
-
-impl fmt::Debug for AribDecodeError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "decode failed")
-    }
-}
-
-impl error::Error for AribDecodeError {}
 
 enum Invocation {
     Lock(Charset),
@@ -153,7 +163,7 @@ impl Invocation {
         &mut self,
         iter: &mut I,
         out: &mut String,
-    ) -> Result<(), Error> {
+    ) -> Result<(), failure::Error> {
         match self {
             Invocation::Lock(c) => c.decode(iter, out),
             &mut Invocation::Single(now, prev) => {
@@ -252,7 +262,7 @@ impl AribDecoder {
         }
     }
 
-    fn decode<'a, I: Iterator<Item = &'a u8>>(mut self, iter: I) -> Result<String, Error> {
+    fn decode<'a, I: Iterator<Item = &'a u8>>(mut self, iter: I) -> Result<String, failure::Error> {
         let mut iter = iter.cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
@@ -276,10 +286,10 @@ impl AribDecoder {
         &mut self,
         s: &mut I,
         out: &mut String,
-    ) -> Result<(), Error> {
+    ) -> Result<(), failure::Error> {
         macro_rules! next {
             () => {
-                s.next().ok_or(AribDecodeError {})?
+                s.next().ok_or(Error::MalformedShortBytes)?
             };
         }
         macro_rules! param1or2 {
@@ -415,25 +425,31 @@ impl AribDecoder {
                 debug!("color: {}", s0);
             }
             COL => {
-                debug!("COL {:?}", param1or2!());
+                let param = param1or2!();
+                debug!("COL {:?}", param);
             }
             POL => {
-                debug!("POL {}", next!());
+                let param = next!();
+                debug!("POL {}", param);
             }
             SSZ | MSZ | NSZ => {
                 debug!("font size: {}", s0);
             }
             SZX => {
-                debug!("font size param: {}", next!());
+                let param = next!();
+                debug!("font size param: {}", param);
             }
             FLC => {
-                debug!("FLC {}", next!());
+                let param = next!();
+                debug!("FLC {}", param);
             }
             CDC => {
-                debug!("CDC {:?}", param1or2!());
+                let param = param1or2!();
+                debug!("CDC {:?}", param);
             }
             WMM => {
-                debug!("WMM {:?}", next!());
+                let param = next!();
+                debug!("WMM {:?}", param);
             }
             TIME => {
                 let mut seq = Vec::new();
@@ -455,16 +471,17 @@ impl AribDecoder {
                 debug!("TIME {:?}", seq);
             }
             MACRO => {
-                unimplemented!();
+                return Err(Error::Unimplemented.into());
             }
             RPC => {
-                unimplemented!();
+                return Err(Error::Unimplemented.into());
             }
             STL | SPL => {
-                unimplemented!();
+                return Err(Error::Unimplemented.into());
             }
             HLC => {
-                debug!("HLC {}", next!());
+                let param = next!();
+                debug!("HLC {}", param);
             }
             CSI => {
                 let mut seq = Vec::new();

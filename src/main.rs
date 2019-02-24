@@ -11,20 +11,20 @@ mod ts;
 
 #[derive(StructOpt)]
 enum Opt {
-    #[structopt(name = "program")]
-    Program,
-    #[structopt(name = "subtitle")]
-    Subtitle,
+    #[structopt(name = "events")]
+    Events,
+    #[structopt(name = "caption")]
+    Caption,
 }
 
 fn main() {
     let opt = Opt::from_args();
     match opt {
-        Opt::Program => {
-            cmd::dump_program::run();
+        Opt::Events => {
+            cmd::events::run();
         }
-        Opt::Subtitle => {
-            cmd::dump_subtitle::run();
+        Opt::Caption => {
+            cmd::caption::run();
         }
     }
 }

@@ -1,5 +1,8 @@
+// todo: use https://github.com/googlei18n/emoji4unicode
 pub fn to_char(cp: u16) -> Option<char> {
     let c = match cp {
+        0x7c21 => '\u{27A1}',
+
         0x7a55 => '\u{1f210}',
         0x7a56 => '\u{1f211}',
         0x7a57 => '\u{1f212}',
@@ -80,6 +83,9 @@ pub fn to_char(cp: u16) -> Option<char> {
         0x7d43 => '\u{1f22f}',
         0x7d44 => '\u{1f230}',
         0x7d45 => '\u{1f231}',
+
+        0x7d79 => '\u{269F}',
+        0x7d7a => '\u{266C}',
         _ => {
             return None;
         }
