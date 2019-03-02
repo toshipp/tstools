@@ -20,8 +20,10 @@ bytes = "0.4"
 tokio-channel = "0.1"
 futures = "0.1"
 structopt = "0.2"
+arib_symbols = { path = "arib_symbols" }
 
 [workspace]
 members = [
        "jisx0213",
+       "arib_symbols",
 ]

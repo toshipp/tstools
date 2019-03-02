@@ -1,4 +1,3 @@
-use super::symbol;
 use failure;
 use failure_derive::Fail;
 use log::debug;
@@ -76,7 +75,7 @@ impl Charset {
                     out.extend(chars);
                 } else {
                     out.push(
-                        symbol::to_char(code_point)
+                        arib_symbols::code_point_to_char(code_point)
                             .ok_or(Error::UnknownCodepoint(code_point as u32))?,
                     );
                 }
@@ -134,7 +133,10 @@ impl Charset {
             }
             Charset::Symbol => {
                 let cp = (u16::from(next!()) << 8) | u16::from(next!());
-                out.push(symbol::to_char(cp).ok_or(Error::UnknownCodepoint(cp as u32))?);
+                out.push(
+                    arib_symbols::code_point_to_char(cp)
+                        .ok_or(Error::UnknownCodepoint(cp as u32))?,
+                );
             }
             Charset::DRCS(_n) => return Err(Error::Unimplemented.into()),
             Charset::Macro => return Err(Error::Unimplemented.into()),
