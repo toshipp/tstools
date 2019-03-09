@@ -16,18 +16,21 @@ use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
 
+use serde_derive::Serialize;
+use serde_json;
+
 use crate::arib;
 use crate::pes;
 use crate::psi;
 use crate::ts;
 
 struct Context {
-    first_pts: Option<u64>,
+    base_pts: Option<u64>,
 }
 
 impl Context {
     fn new() -> Context {
-        Context { first_pts: None }
+        Context { base_pts: None }
     }
 }
 
@@ -153,18 +156,27 @@ fn get_caption<'a>(
     }
 }
 
-fn caption<'a>(
+#[derive(Serialize)]
+struct Caption {
+    time_sec: u64,
+    time_ms: u64,
+    caption: String,
+}
+
+fn dump_caption<'a>(
     data_units: &Vec<arib::caption::DataUnit<'a>>,
-    ln: u32,
+    offset: u64,
 ) -> Result<(), failure::Error> {
-    if !data_units.is_empty() {
-        info!("cap len: {}", data_units.len());
-        for du in data_units {
-            let caption = arib::string::decode_to_utf8(du.data_unit_data)?;
-            if !caption.is_empty() {
-                println!("{}: caption({:?}): {}", ln, du.data_unit_parameter, caption);
-                debug!("raw {:?}", du.data_unit_data);
-            }
+    for du in data_units {
+        let caption_string = arib::string::decode_to_utf8(du.data_unit_data)?;
+        if !caption_string.is_empty() {
+            let caption = Caption {
+                time_sec: offset / pes::PTS_HZ,
+                time_ms: offset % pes::PTS_HZ * 1000 / pes::PTS_HZ,
+                caption: caption_string,
+            };
+            println!("{}", serde_json::to_string(&caption).unwrap());
+            debug!("raw {:?}", du.data_unit_data);
         }
     }
     Ok(())
@@ -185,12 +197,12 @@ where
     pes::Buffer::new(s)
         .for_each(move |bytes| {
             let mut ctx = pctx.lock().unwrap();
-            if ctx.first_pts.is_some() {
+            if ctx.base_pts.is_some() {
                 return Ok(());
             }
             pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
                 if let Some(pts) = get_pts(&pes) {
-                    ctx.first_pts = Some(pts);
+                    ctx.base_pts = Some(pts);
                 }
                 Ok(())
             })
@@ -205,37 +217,24 @@ where
 {
     pes::Buffer::new(s)
         .for_each(move |bytes| {
-            if let Err(e) = pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
+            pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
+                let ctx = pctx.lock().unwrap();
+                let offset = match (get_pts(&pes), ctx.base_pts) {
+                    (Some(now), Some(base)) => now - base,
+                    _ => return Ok(()),
+                };
                 if let Some(dg) = get_caption(&pes)? {
-                    match dg.data_group_data {
-                        arib::caption::DataGroupData::CaptionManagementData(cmd) => {
-                            caption(&cmd.data_units, line!())?;
+                    let data_units = match dg.data_group_data {
+                        arib::caption::DataGroupData::CaptionManagementData(ref cmd) => {
+                            &cmd.data_units
                         }
-                        arib::caption::DataGroupData::CaptionData(cd) => {
-                            let ctx = pctx.lock().unwrap();
-                            match (ctx.first_pts, get_pts(&pes)) {
-                                (Some(first), Some(current)) => {
-                                    let offset = current - first;
-                                    info!(
-                                        "offset {}.{}",
-                                        offset / pes::PTS_HZ,
-                                        offset % pes::PTS_HZ * 1000 / pes::PTS_HZ
-                                    );
-                                }
-                                _ => {}
-                            }
-
-                            caption(&cd.data_units, line!())?;
-                            debug!("bytes: {:?}", bytes);
-                        }
-                    }
+                        arib::caption::DataGroupData::CaptionData(ref cd) => &cd.data_units,
+                    };
+                    dump_caption(data_units, offset)?;
+                    debug!("bytes: {:?}", bytes);
                 }
                 Ok(())
-            }) {
-                info!("pes parse error: {:#?}", e);
-                info!("raw bytes : {:#?}", bytes);
-            }
-            Ok(())
+            })
         })
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
