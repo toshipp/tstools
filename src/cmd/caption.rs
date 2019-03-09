@@ -8,8 +8,6 @@ use std::sync::Mutex;
 
 use std::fmt::Debug;
 
-use std::collections::HashSet;
-
 use futures::future::lazy;
 
 use tokio::codec::FramedRead;
@@ -24,16 +22,12 @@ use crate::psi;
 use crate::ts;
 
 struct Context {
-    stream_types: HashSet<u8>,
-    descriptors: HashSet<u8>,
+    first_pts: Option<u64>,
 }
 
 impl Context {
     fn new() -> Context {
-        Context {
-            stream_types: HashSet::new(),
-            descriptors: HashSet::new(),
-        }
+        Context { first_pts: None }
     }
 }
 
@@ -102,14 +96,17 @@ where
             let table_id = bytes[0];
             match table_id {
                 psi::TS_PROGRAM_MAP_SECTION => {
-                    let mut ctx = pctx.lock().unwrap();
                     let pms = psi::TSProgramMapSection::parse(bytes)?;
                     trace!("program map section: {:#?}", pms);
                     for si in pms.stream_info.iter() {
-                        ctx.stream_types.insert(si.stream_type);
                         if is_caption(&si) {
                             if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
-                                tokio::spawn(pes_processor(rx));
+                                tokio::spawn(caption_processor(pctx.clone(), rx));
+                            }
+                        }
+                        if si.stream_type == psi::STREAM_TYPE_VIDEO {
+                            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
+                                tokio::spawn(video_pts_processor(pctx.clone(), rx));
                             }
                         }
                     }
@@ -173,7 +170,35 @@ fn caption<'a>(
     Ok(())
 }
 
-fn pes_processor<S, E>(s: S) -> impl Future<Item = (), Error = ()>
+fn get_pts(pes: &pes::PESPacket) -> Option<u64> {
+    if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
+        return body.pts;
+    }
+    return None;
+}
+
+fn video_pts_processor<S, E>(pctx: Arc<Mutex<Context>>, s: S) -> impl Future<Item = (), Error = ()>
+where
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
+{
+    pes::Buffer::new(s)
+        .for_each(move |bytes| {
+            let mut ctx = pctx.lock().unwrap();
+            if ctx.first_pts.is_some() {
+                return Ok(());
+            }
+            pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
+                if let Some(pts) = get_pts(&pes) {
+                    ctx.first_pts = Some(pts);
+                }
+                Ok(())
+            })
+        })
+        .map_err(|e| info!("err {}: {:#?}", line!(), e))
+}
+
+fn caption_processor<S, E>(pctx: Arc<Mutex<Context>>, s: S) -> impl Future<Item = (), Error = ()>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
     E: Debug,
@@ -187,6 +212,19 @@ where
                             caption(&cmd.data_units, line!())?;
                         }
                         arib::caption::DataGroupData::CaptionData(cd) => {
+                            let ctx = pctx.lock().unwrap();
+                            match (ctx.first_pts, get_pts(&pes)) {
+                                (Some(first), Some(current)) => {
+                                    let offset = current - first;
+                                    info!(
+                                        "offset {}.{}",
+                                        offset / pes::PTS_HZ,
+                                        offset % pes::PTS_HZ * 1000 / pes::PTS_HZ
+                                    );
+                                }
+                                _ => {}
+                            }
+
                             caption(&cd.data_units, line!())?;
                             debug!("bytes: {:?}", bytes);
                         }
@@ -221,9 +259,6 @@ pub fn run() {
             if let Err(e) = ret {
                 info!("err: {}", e);
             }
-            let ctx = pctx.lock().unwrap();
-            info!("types: {:#?}", ctx.stream_types);
-            info!("descriptors: {:#?}", ctx.descriptors);
             Ok(())
         })
     });

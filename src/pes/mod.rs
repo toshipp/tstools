@@ -4,6 +4,8 @@ use failure::Error;
 mod buffer;
 pub use self::buffer::*;
 
+pub const PTS_HZ: u64 = 90 * 1000;
+
 const PROGRAM_STREAM_MAP: u8 = 0b10111100;
 const PRIVATE_STREAM_2: u8 = 0b10111111;
 const ECM: u8 = 0b11110000;
