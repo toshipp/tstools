@@ -1,7 +1,7 @@
 use failure;
 
 use env_logger;
-use log::{debug, info, trace};
+use log::{debug, info};
 
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -19,6 +19,7 @@ use tokio::runtime::Builder;
 use serde_derive::Serialize;
 use serde_json;
 
+use super::common;
 use crate::arib;
 use crate::pes;
 use crate::psi;
@@ -34,42 +35,6 @@ impl Context {
     }
 }
 
-fn pat_processor<S, E>(
-    pctx: Arc<Mutex<Context>>,
-    mut demux_register: ts::demuxer::Register,
-    s: S,
-) -> impl Future<Item = (), Error = ()>
-where
-    S: Stream<Item = ts::TSPacket, Error = E>,
-    E: Debug,
-{
-    psi::Buffer::new(s)
-        .for_each(move |bytes| {
-            let bytes = &bytes[..];
-            let table_id = bytes[0];
-            match table_id {
-                psi::PROGRAM_ASSOCIATION_SECTION => {
-                    let pas = psi::ProgramAssociationSection::parse(bytes)?;
-                    for (program_number, pid) in pas.program_association {
-                        if program_number != 0 {
-                            // not network pid
-                            if let Ok(rx) = demux_register.try_register(pid) {
-                                tokio::spawn(pmt_processor(
-                                    pctx.clone(),
-                                    demux_register.clone(),
-                                    rx,
-                                ));
-                            }
-                        }
-                    }
-                }
-                _ => unreachable!(),
-            }
-            Ok(())
-        })
-        .map_err(|e| info!("err {}: {:#?}", line!(), e))
-}
-
 fn is_caption_component(desc: &psi::Descriptor) -> bool {
     if let psi::Descriptor::StreamIdentifierDescriptor(sid) = desc {
         return arib::caption::is_non_partial_reception_caption(sid.component_tag);
@@ -82,43 +47,6 @@ fn is_caption(si: &psi::StreamInfo) -> bool {
         return si.descriptors.iter().any(is_caption_component);
     }
     false
-}
-
-fn pmt_processor<S, E>(
-    pctx: Arc<Mutex<Context>>,
-    mut demux_regiser: ts::demuxer::Register,
-    s: S,
-) -> impl Future<Item = (), Error = ()>
-where
-    S: Stream<Item = ts::TSPacket, Error = E>,
-    E: Debug,
-{
-    psi::Buffer::new(s)
-        .for_each(move |bytes| {
-            let bytes = &bytes[..];
-            let table_id = bytes[0];
-            match table_id {
-                psi::TS_PROGRAM_MAP_SECTION => {
-                    let pms = psi::TSProgramMapSection::parse(bytes)?;
-                    trace!("program map section: {:#?}", pms);
-                    for si in pms.stream_info.iter() {
-                        if is_caption(&si) {
-                            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
-                                tokio::spawn(caption_processor(pctx.clone(), rx));
-                            }
-                        }
-                        if si.stream_type == psi::STREAM_TYPE_VIDEO {
-                            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
-                                tokio::spawn(video_pts_processor(pctx.clone(), rx));
-                            }
-                        }
-                    }
-                }
-                _ => unreachable!(),
-            }
-            Ok(())
-        })
-        .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
 fn sync_caption<'a>(
@@ -182,13 +110,6 @@ fn dump_caption<'a>(
     Ok(())
 }
 
-fn get_pts(pes: &pes::PESPacket) -> Option<u64> {
-    if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
-        return body.pts;
-    }
-    return None;
-}
-
 fn video_pts_processor<S, E>(pctx: Arc<Mutex<Context>>, s: S) -> impl Future<Item = (), Error = ()>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
@@ -201,7 +122,7 @@ where
                 return Ok(());
             }
             pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
-                if let Some(pts) = get_pts(&pes) {
+                if let Some(pts) = common::get_pts(&pes) {
                     ctx.base_pts = Some(pts);
                 }
                 Ok(())
@@ -219,7 +140,7 @@ where
         .for_each(move |bytes| {
             pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
                 let ctx = pctx.lock().unwrap();
-                let offset = match (get_pts(&pes), ctx.base_pts) {
+                let offset = match (common::get_pts(&pes), ctx.base_pts) {
                     (Some(now), Some(base)) => now - base,
                     _ => return Ok(()),
                 };
@@ -239,20 +160,40 @@ where
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
+struct CaptionProcessorSpawner {
+    pctx: Arc<Mutex<Context>>,
+}
+
+impl Clone for CaptionProcessorSpawner {
+    fn clone(&self) -> Self {
+        CaptionProcessorSpawner {
+            pctx: self.pctx.clone(),
+        }
+    }
+}
+
+impl common::Spawner for CaptionProcessorSpawner {
+    fn spawn(&self, si: &psi::StreamInfo, demux_regiser: &mut ts::demuxer::Register) {
+        if is_caption(&si) {
+            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
+                tokio::spawn(caption_processor(self.pctx.clone(), rx));
+            }
+        }
+        if si.stream_type == psi::STREAM_TYPE_VIDEO {
+            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
+                tokio::spawn(video_pts_processor(self.pctx.clone(), rx));
+            }
+        }
+    }
+}
+
 pub fn run() {
     env_logger::init();
 
     let proc = lazy(|| {
         let pctx = Arc::new(Mutex::new(Context::new()));
         let demuxer = ts::demuxer::Demuxer::new();
-        let mut demux_register = demuxer.register();
-        // pat
-        tokio::spawn(pat_processor(
-            pctx.clone(),
-            demux_register.clone(),
-            demux_register.try_register(ts::PAT_PID).unwrap(),
-        ));
-
+        common::spawn_stream_splitter(CaptionProcessorSpawner { pctx: pctx }, demuxer.register());
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
         decoder.forward(demuxer).then(move |ret| {
             if let Err(e) = ret {

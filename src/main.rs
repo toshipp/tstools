@@ -15,6 +15,8 @@ enum Opt {
     Events,
     #[structopt(name = "caption")]
     Caption,
+    #[structopt(name = "jitter")]
+    Jitter,
 }
 
 fn main() {
@@ -25,6 +27,9 @@ fn main() {
         }
         Opt::Caption => {
             cmd::caption::run();
+        }
+        Opt::Jitter => {
+            cmd::jitter::run();
         }
     }
 }
