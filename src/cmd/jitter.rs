@@ -1,9 +1,6 @@
 use env_logger;
 use log::info;
 
-use std::sync::Arc;
-use std::sync::Mutex;
-
 use futures::future::lazy;
 
 use serde_derive::Serialize;
@@ -13,7 +10,7 @@ use tokio::io::stdin;
 use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
-use tokio_channel::mpsc::Receiver;
+use tokio_channel::mpsc::{channel, Receiver, Sender};
 
 use super::common;
 use crate::pes;
@@ -25,29 +22,18 @@ struct Jitter {
     jitter: f64,
 }
 
-struct Context {
-    audio_pts: Option<u64>,
-    video_pts: Option<u64>,
-}
-
 fn audio_processor(
-    pctx: Arc<Mutex<Context>>,
     rx: Receiver<ts::TSPacket>,
+    tx: Sender<u64>,
 ) -> impl Future<Item = (), Error = ()>
 where
 {
     pes::Buffer::new(rx)
-        .for_each(move |bytes| {
-            pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
-                let mut ctx = pctx.lock().unwrap();
-                if ctx.audio_pts.is_none() {
-                    if let Some(pts) = common::get_pts(&pes) {
-                        ctx.audio_pts = Some(pts);
-                    }
-                }
-                Ok(())
-            })
-        })
+        .and_then(|bytes| pes::PESPacket::parse(&bytes[..]).map(|pes| common::get_pts(&pes)))
+        .filter_map(|x| x)
+        .take(1)
+        .forward(tx)
+        .map(|_| ())
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
@@ -69,96 +55,117 @@ fn index_pattern(pattern: &[u8], seq: &[u8]) -> Option<usize> {
 }
 
 fn video_processor(
-    pctx: Arc<Mutex<Context>>,
     rx: Receiver<ts::TSPacket>,
+    tx: Sender<u64>,
 ) -> impl Future<Item = (), Error = ()> {
     pes::Buffer::new(rx)
-        .for_each(move |bytes| {
-            pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
-                let mut ctx = pctx.lock().unwrap();
-                if ctx.video_pts.is_some() {
-                    return Ok(());
-                }
+        .and_then(|bytes| {
+            pes::PESPacket::parse(&bytes[..]).map(|pes| {
                 if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
                     if let Some(index) =
                         index_pattern(PICTURE_START_CODE, body.pes_packet_data_byte)
                     {
                         let picture_header = &body.pes_packet_data_byte[index..];
-                        if picture_header.len() < 6 {
-                            return Ok(());
-                        }
-                        let picture_coding_type = (picture_header[5] & 0x38) >> 3;
-                        // I picture
-                        if picture_coding_type == 1 {
-                            ctx.video_pts = dbg!(common::get_pts(&pes));
+                        if picture_header.len() >= 6 {
+                            let picture_coding_type = (picture_header[5] & 0x38) >> 3;
+                            // I picture
+                            if picture_coding_type == 1 {
+                                return common::get_pts(&pes);
+                            }
                         }
                     }
                 }
-                Ok(())
+                None
             })
         })
+        .filter_map(|x| x)
+        .take(1)
+        .forward(tx)
+        .map(|_| ())
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
 struct JitterProcessorSpawner {
-    pctx: Arc<Mutex<Context>>,
+    apts_tx: Sender<u64>,
+    vpts_tx: Sender<u64>,
 }
 
 impl Clone for JitterProcessorSpawner {
     fn clone(&self) -> Self {
         JitterProcessorSpawner {
-            pctx: self.pctx.clone(),
+            apts_tx: self.apts_tx.clone(),
+            vpts_tx: self.vpts_tx.clone(),
         }
     }
 }
 
 impl common::Spawner for JitterProcessorSpawner {
-    fn spawn(&self, si: &psi::StreamInfo, demux_register: &mut ts::demuxer::Register) {
+    fn spawn(
+        &self,
+        si: &psi::StreamInfo,
+        demux_register: &mut ts::demuxer::Register,
+    ) -> Result<(), ts::demuxer::RegistrationError> {
         if si.stream_type == psi::STREAM_TYPE_ADTS {
-            if let Ok(rx) = demux_register.try_register(si.elementary_pid) {
-                tokio::spawn(audio_processor(self.pctx.clone(), rx));
+            match demux_register.try_register(si.elementary_pid) {
+                Ok(rx) => {
+                    tokio::spawn(audio_processor(rx, self.apts_tx.clone()));
+                }
+                Err(e) => {
+                    if e.is_closed() {
+                        return Err(e);
+                    }
+                }
             }
         }
         if si.stream_type == psi::STREAM_TYPE_VIDEO {
-            if let Ok(rx) = demux_register.try_register(si.elementary_pid) {
-                tokio::spawn(video_processor(self.pctx.clone(), rx));
+            match demux_register.try_register(si.elementary_pid) {
+                Ok(rx) => {
+                    tokio::spawn(video_processor(rx, self.vpts_tx.clone()));
+                }
+                Err(e) => {
+                    if e.is_closed() {
+                        return Err(e);
+                    }
+                }
             }
         }
+        Ok(())
     }
 }
 
 pub fn run() {
     env_logger::init();
 
-    let pctx = Arc::new(Mutex::new(Context {
-        audio_pts: None,
-        video_pts: None,
-    }));
-    let pctx2 = pctx.clone();
     let proc = lazy(|| {
+        let (apts_tx, apts_rx) = channel(1);
+        let (vpts_tx, vpts_rx) = channel(1);
         let demuxer = ts::demuxer::Demuxer::new();
-        common::spawn_stream_splitter(JitterProcessorSpawner { pctx: pctx2 }, demuxer.register());
+        let spawner = JitterProcessorSpawner {
+            apts_tx: apts_tx,
+            vpts_tx: vpts_tx,
+        };
+        common::spawn_stream_splitter(spawner, demuxer.register());
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        decoder.forward(demuxer).then(move |ret| {
-            if let Err(e) = ret {
-                info!("err: {}", e);
-            }
-            Ok(())
-        })
+        apts_rx
+            .zip(vpts_rx)
+            .take(1)
+            .for_each(|(apts, vpts)| {
+                let jitter = Jitter {
+                    jitter: f64::from((vpts - apts) as u32) / 90000f64,
+                };
+                println!("{}", serde_json::to_string(&jitter).unwrap());
+                Ok(())
+            })
+            .select2(
+                decoder
+                    .forward(demuxer)
+                    .map_err(|e| info!("decoding error: {}", e)),
+            )
+            .map(|_| ())
+            .map_err(|_| ())
     });
 
     let mut rt = Builder::new().core_threads(1).build().unwrap();
     rt.spawn(proc);
     rt.shutdown_on_idle().wait().unwrap();
-
-    let ctx = pctx.lock().unwrap();
-    match (ctx.audio_pts, ctx.video_pts) {
-        (Some(a), Some(v)) => {
-            let jitter = Jitter {
-                jitter: f64::from((a - v) as u32) / 90000f64,
-            };
-            println!("{}", serde_json::to_string(&jitter).unwrap());
-        }
-        _ => {}
-    }
 }

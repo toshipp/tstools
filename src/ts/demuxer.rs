@@ -26,13 +26,33 @@ pub struct Register {
 }
 
 #[derive(Debug)]
-pub struct RegistrationError {}
+pub enum RegistrationError {
+    AlreadyRegistered,
+    Closed,
+}
+
+impl RegistrationError {
+    pub fn is_closed(&self) -> bool {
+        match self {
+            RegistrationError::Closed => true,
+            _ => false,
+        }
+    }
+}
+
+impl Display for RegistrationError {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl StdError for RegistrationError {}
 
 impl Register {
     pub fn try_register(&mut self, pid: u16) -> Result<Receiver<TSPacket>, RegistrationError> {
         let mut inner = self.inner.lock().unwrap();
         if inner.closed {
-            return Err(RegistrationError {});
+            return Err(RegistrationError::Closed);
         }
         match inner.senders.entry(pid) {
             Entry::Vacant(entry) => {
@@ -40,7 +60,7 @@ impl Register {
                 entry.insert(tx);
                 Ok(rx)
             }
-            _ => Err(RegistrationError {}),
+            _ => Err(RegistrationError::AlreadyRegistered),
         }
     }
 }
@@ -88,6 +108,14 @@ impl Display for DemuxError {
 
 impl StdError for DemuxError {}
 
+impl Drop for Demuxer {
+    fn drop(&mut self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.senders.clear();
+        inner.closed = true;
+    }
+}
+
 impl Sink for Demuxer {
     type SinkItem = TSPacket;
     type SinkError = DemuxError;
@@ -99,21 +127,18 @@ impl Sink for Demuxer {
         let mut inner = self.inner.lock().unwrap();
         let pid = item.pid;
         match inner.senders.get_mut(&pid) {
-            Some(sender) => sender
-                .start_send(item)
-                .map_err(|e| DemuxError(e.into_inner())),
+            Some(sender) => match sender.start_send(item) {
+                Ok(p) => Ok(p),
+                Err(_) => {
+                    // when sender returns an error, the channel is closed.
+                    Ok(AsyncSink::Ready)
+                }
+            },
             None => Ok(AsyncSink::Ready),
         }
     }
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
-        Ok(Async::Ready(()))
-    }
-
-    fn close(&mut self) -> Result<Async<()>, Self::SinkError> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.senders.clear();
-        inner.closed = true;
         Ok(Async::Ready(()))
     }
 }

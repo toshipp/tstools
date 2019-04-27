@@ -173,17 +173,36 @@ impl Clone for CaptionProcessorSpawner {
 }
 
 impl common::Spawner for CaptionProcessorSpawner {
-    fn spawn(&self, si: &psi::StreamInfo, demux_regiser: &mut ts::demuxer::Register) {
+    fn spawn(
+        &self,
+        si: &psi::StreamInfo,
+        demux_register: &mut ts::demuxer::Register,
+    ) -> Result<(), ts::demuxer::RegistrationError> {
         if is_caption(&si) {
-            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
-                tokio::spawn(caption_processor(self.pctx.clone(), rx));
+            match demux_register.try_register(si.elementary_pid) {
+                Ok(rx) => {
+                    tokio::spawn(caption_processor(self.pctx.clone(), rx));
+                }
+                Err(e) => {
+                    if e.is_closed() {
+                        return Err(e);
+                    }
+                }
             }
         }
         if si.stream_type == psi::STREAM_TYPE_VIDEO {
-            if let Ok(rx) = demux_regiser.try_register(si.elementary_pid) {
-                tokio::spawn(video_pts_processor(self.pctx.clone(), rx));
+            match demux_register.try_register(si.elementary_pid) {
+                Ok(rx) => {
+                    tokio::spawn(video_pts_processor(self.pctx.clone(), rx));
+                }
+                Err(e) => {
+                    if e.is_closed() {
+                        return Err(e);
+                    }
+                }
             }
         }
+        Ok(())
     }
 }
 
