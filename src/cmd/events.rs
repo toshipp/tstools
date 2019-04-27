@@ -7,7 +7,6 @@ use std::sync::Mutex;
 use std::fmt::Debug;
 
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 use futures::future::lazy;
 
@@ -59,8 +58,6 @@ impl Event {
 }
 
 struct Context {
-    stream_types: HashSet<u8>,
-    descriptors: HashSet<u8>,
     service_id: Option<u16>,
     events: BTreeMap<u16, Event>,
 }
@@ -68,8 +65,6 @@ struct Context {
 impl Context {
     fn new() -> Context {
         Context {
-            stream_types: HashSet::new(),
-            descriptors: HashSet::new(),
             service_id: None,
             events: BTreeMap::new(),
         }
@@ -140,16 +135,13 @@ where
             let mut ctx = pctx.lock().unwrap();
             let bytes = &bytes[..];
             let table_id = bytes[0];
-            match table_id {
-                n if 0x4e <= n && n <= 0x6f => {
-                    let eit = psi::EventInformationSection::parse(bytes)?;
-                    if let Some(id) = ctx.service_id {
-                        if id == eit.service_id {
-                            return process_eit(&mut ctx.events, eit);
-                        }
+            if 0x4e <= table_id && table_id <= 0x6f {
+                let eit = psi::EventInformationSection::parse(bytes)?;
+                if let Some(id) = ctx.service_id {
+                    if id == eit.service_id {
+                        return process_eit(&mut ctx.events, eit);
                     }
                 }
-                _ => unreachable!(),
             }
             Ok(())
         })
@@ -166,15 +158,10 @@ where
             let mut ctx = pctx.lock().unwrap();
             let bytes = &bytes[..];
             let table_id = bytes[0];
-            match table_id {
-                n if psi::SELF_STREAM_TABLE_ID == n => {
-                    let sdt = psi::ServiceDescriptionSection::parse(bytes)?;
-                    if ctx.service_id.is_none() && !sdt.services.is_empty() {
-                        ctx.service_id = Some(sdt.services[0].service_id);
-                    }
-                }
-                _ => {
-                    unreachable!("bug");
+            if table_id == psi::SELF_STREAM_TABLE_ID {
+                let sdt = psi::ServiceDescriptionSection::parse(bytes)?;
+                if ctx.service_id.is_none() && !sdt.services.is_empty() {
+                    ctx.service_id = Some(sdt.services[0].service_id);
                 }
             }
             Ok(())
@@ -206,11 +193,9 @@ pub fn run() {
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
         decoder.forward(demuxer).then(move |ret| {
             if let Err(e) = ret {
-                info!("err: {}", e);
+                info!("error: {}", e);
             }
             let ctx = pctx.lock().unwrap();
-            info!("types: {:#?}", ctx.stream_types);
-            info!("descriptors: {:#?}", ctx.descriptors);
             for e in ctx.events.values() {
                 println!("{}", serde_json::to_string(e).unwrap());
             }

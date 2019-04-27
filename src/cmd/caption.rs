@@ -214,12 +214,10 @@ pub fn run() {
         let demuxer = ts::demuxer::Demuxer::new();
         common::spawn_stream_splitter(CaptionProcessorSpawner { pctx: pctx }, demuxer.register());
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        decoder.forward(demuxer).then(move |ret| {
-            if let Err(e) = ret {
-                info!("err: {}", e);
-            }
-            Ok(())
-        })
+        decoder
+            .forward(demuxer)
+            .map(|_| ())
+            .map_err(|e| info!("error: {}", e))
     });
 
     let mut rt = Builder::new().core_threads(1).build().unwrap();
