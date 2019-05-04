@@ -38,6 +38,7 @@ where
 }
 
 const PICTURE_START_CODE: &[u8] = &[0, 0, 1, 0];
+const I_PICTURE: u8 = 1;
 
 fn index_pattern(pattern: &[u8], seq: &[u8]) -> Option<usize> {
     if pattern.len() > seq.len() {
@@ -68,8 +69,7 @@ fn video_processor(
                         let picture_header = &body.pes_packet_data_byte[index..];
                         if picture_header.len() >= 6 {
                             let picture_coding_type = (picture_header[5] & 0x38) >> 3;
-                            // I picture
-                            if picture_coding_type == 1 {
+                            if picture_coding_type == I_PICTURE {
                                 return common::get_pts(&pes);
                             }
                         }
