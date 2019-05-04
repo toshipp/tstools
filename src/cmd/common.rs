@@ -39,9 +39,13 @@ where
             let bytes = &bytes[..];
             let table_id = bytes[0];
             if table_id == psi::PROGRAM_ASSOCIATION_SECTION {
-                let pas = psi::ProgramAssociationSection::parse(bytes)
-                    .map_err(|e| info!("err {}: {:#?}", line!(), e))
-                    .unwrap();
+                let pas = match psi::ProgramAssociationSection::parse(bytes) {
+                    Ok(pas) => pas,
+                    Err(e) => {
+                        info!("err {}: {:#?}", line!(), e);
+                        return Ok(());
+                    }
+                };
                 for (program_number, pid) in pas.program_association {
                     if program_number != 0 {
                         // not network pid
@@ -80,9 +84,13 @@ where
             let bytes = &bytes[..];
             let table_id = bytes[0];
             if table_id == psi::TS_PROGRAM_MAP_SECTION {
-                let pms = psi::TSProgramMapSection::parse(bytes)
-                    .map_err(|e| info!("err {}: {:#?}", line!(), e))
-                    .unwrap();
+                let pms = match psi::TSProgramMapSection::parse(bytes) {
+                    Ok(pms) => pms,
+                    Err(e) => {
+                        info!("err {}: {:#?}", line!(), e);
+                        return Ok(());
+                    }
+                };
                 trace!("program map section: {:#?}", pms);
                 for si in pms.stream_info.iter() {
                     if let Err(e) = spawner.spawn(&si, &mut demux_regiser) {
