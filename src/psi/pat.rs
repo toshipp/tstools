@@ -1,6 +1,5 @@
 use failure::bail;
 use failure::Error;
-use std::collections::HashMap;
 
 use crate::crc32;
 use crate::util;
@@ -14,7 +13,7 @@ pub struct ProgramAssociationSection<'a> {
     pub current_next_indicator: u8,
     pub section_number: u8,
     pub last_section_number: u8,
-    pub program_association: HashMap<u16, u16>,
+    pub program_association: Vec<(u16, u16)>,
     pub crc_32: u32,
 
     _raw_bytes: &'a [u8],
@@ -37,14 +36,14 @@ impl<'a> ProgramAssociationSection<'a> {
 
         check_len!(bytes.len(), 3 + section_length);
         let mut map = &bytes[8..3 + section_length - 4];
-        let mut program_association = HashMap::new();
+        let mut program_association = Vec::new();
         if map.len() % 4 != 0 {
             bail!("invalid length");
         }
         while map.len() > 0 {
             let program_number = (u16::from(map[0]) << 8) | u16::from(map[1]);
             let pid = (u16::from(map[2] & 0x1f) << 8) | u16::from(map[3]);
-            program_association.insert(program_number, pid);
+            program_association.push((program_number, pid));
             map = &map[4..];
         }
 
