@@ -174,7 +174,7 @@ impl Clone for CaptionProcessorSpawner {
 
 impl common::Spawner for CaptionProcessorSpawner {
     fn spawn(
-        &self,
+        &mut self,
         si: &psi::StreamInfo,
         demux_register: &mut ts::demuxer::Register,
     ) -> Result<(), ts::demuxer::RegistrationError> {

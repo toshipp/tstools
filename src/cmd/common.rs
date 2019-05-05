@@ -2,7 +2,7 @@ use log::{info, trace};
 
 use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
-use tokio_channel::mpsc::Receiver;
+use tokio::sync::mpsc::Receiver;
 
 use crate::pes;
 use crate::psi;
@@ -12,7 +12,7 @@ use crate::ts::demuxer::{Register, RegistrationError};
 
 pub trait Spawner: Clone {
     fn spawn(
-        &self,
+        &mut self,
         si: &psi::StreamInfo,
         demux_register: &mut Register,
     ) -> Result<(), RegistrationError>;
@@ -35,7 +35,7 @@ where
     Sp: Spawner + Send + 'static,
 {
     psi::Buffer::new(rx)
-        .for_each(move |bytes| {
+        .take_while(move |bytes| {
             let bytes = &bytes[..];
             let table_id = bytes[0];
             if table_id == psi::PROGRAM_ASSOCIATION_SECTION {
@@ -43,7 +43,7 @@ where
                     Ok(pas) => pas,
                     Err(e) => {
                         info!("err {}: {:#?}", line!(), e);
-                        return Ok(());
+                        return Ok(true);
                     }
                 };
                 for (program_number, pid) in pas.program_association {
@@ -56,6 +56,7 @@ where
                                     spawner.clone(),
                                     rx,
                                 ));
+                                return Ok(false);
                             }
                             Err(e) => {
                                 if e.is_closed() {
@@ -66,21 +67,22 @@ where
                     }
                 }
             }
-            Ok(())
+            Ok(true)
         })
+        .for_each(|_| Ok(()))
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 
 fn pmt_processor<Sp>(
     mut demux_regiser: ts::demuxer::Register,
-    spawner: Sp,
+    mut spawner: Sp,
     rx: Receiver<ts::TSPacket>,
 ) -> impl Future<Item = (), Error = ()>
 where
     Sp: Spawner,
 {
     psi::Buffer::new(rx)
-        .for_each(move |bytes| {
+        .take_while(move |bytes| {
             let bytes = &bytes[..];
             let table_id = bytes[0];
             if table_id == psi::TS_PROGRAM_MAP_SECTION {
@@ -88,7 +90,7 @@ where
                     Ok(pms) => pms,
                     Err(e) => {
                         info!("err {}: {:#?}", line!(), e);
-                        return Ok(());
+                        return Ok(true);
                     }
                 };
                 trace!("program map section: {:#?}", pms);
@@ -99,9 +101,11 @@ where
                         }
                     }
                 }
+                return Ok(false);
             }
-            Ok(())
+            Ok(true)
         })
+        .for_each(|_| Ok(()))
         .map_err(|e| info!("err {}: {:#?}", line!(), e))
 }
 

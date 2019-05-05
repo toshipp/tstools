@@ -1,20 +1,27 @@
 use crate::ts::TSPacket;
-use std::collections::hash_map::{Entry, HashMap};
+use std::collections::hash_map::{Entry as HashEntry, HashMap};
 use std::error::Error as StdError;
 use std::fmt::{Display, Error, Formatter};
 use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::prelude::{Async, AsyncSink, Sink};
-use tokio_channel::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+
+struct Entry {
+    sender: Sender<TSPacket>,
+    closed: bool,
+}
 
 struct Inner {
-    senders: HashMap<u16, Sender<TSPacket>>,
+    num: usize,
+    senders: HashMap<u16, Entry>,
     closed: bool,
 }
 
 impl Inner {
     fn new() -> Inner {
         Inner {
+            num: 0,
             senders: HashMap::new(),
             closed: false,
         }
@@ -54,14 +61,21 @@ impl Register {
         if inner.closed {
             return Err(RegistrationError::Closed);
         }
-        match inner.senders.entry(pid) {
-            Entry::Vacant(entry) => {
+        let ret = match inner.senders.entry(pid) {
+            HashEntry::Vacant(entry) => {
                 let (tx, rx) = channel(1);
-                entry.insert(tx);
+                entry.insert(Entry {
+                    sender: tx,
+                    closed: false,
+                });
                 Ok(rx)
             }
             _ => Err(RegistrationError::AlreadyRegistered),
+        };
+        if ret.is_ok() {
+            inner.num += 1;
         }
+        ret
     }
 }
 
@@ -92,12 +106,8 @@ impl Demuxer {
 }
 
 #[derive(Debug)]
-pub struct DemuxError(TSPacket);
-
-impl DemuxError {
-    fn into_packet(self) -> TSPacket {
-        self.0
-    }
+pub enum DemuxError {
+    Closed,
 }
 
 impl Display for DemuxError {
@@ -125,17 +135,33 @@ impl Sink for Demuxer {
         item: Self::SinkItem,
     ) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         let mut inner = self.inner.lock().unwrap();
-        let pid = item.pid;
-        match inner.senders.get_mut(&pid) {
-            Some(sender) => match sender.start_send(item) {
-                Ok(p) => Ok(p),
-                Err(_) => {
-                    // when sender returns an error, the channel is closed.
-                    Ok(AsyncSink::Ready)
-                }
-            },
-            None => Ok(AsyncSink::Ready),
+        if inner.num == 0 {
+            return Err(DemuxError::Closed);
         }
+        let pid = item.pid;
+        let mut is_err = false;
+        let ret = match inner.senders.get_mut(&pid) {
+            Some(entry) => {
+                if entry.closed {
+                    Ok(AsyncSink::Ready)
+                } else {
+                    match entry.sender.start_send(item) {
+                        Ok(p) => Ok(p),
+                        Err(_) => {
+                            // when sender returns an error, the channel is closed.
+                            entry.closed = true;
+                            is_err = true;
+                            Ok(AsyncSink::Ready)
+                        }
+                    }
+                }
+            }
+            None => Ok(AsyncSink::Ready),
+        };
+        if is_err {
+            inner.num -= 1;
+        }
+        return ret;
     }
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {

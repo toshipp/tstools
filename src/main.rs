@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use structopt::StructOpt;
 
 #[macro_use]
@@ -16,7 +17,10 @@ enum Opt {
     #[structopt(name = "caption")]
     Caption,
     #[structopt(name = "jitter")]
-    Jitter,
+    Jitter {
+        #[structopt(parse(from_os_str))]
+        input: PathBuf,
+    },
 }
 
 fn main() {
@@ -28,8 +32,8 @@ fn main() {
         Opt::Caption => {
             cmd::caption::run();
         }
-        Opt::Jitter => {
-            cmd::jitter::run();
+        Opt::Jitter { input } => {
+            cmd::jitter::run(input);
         }
     }
 }
