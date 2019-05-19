@@ -3,6 +3,10 @@ use arib_symbols;
 #[test]
 fn test() {
     assert_eq!(
+        arib_symbols::code_point_to_char(0x7540).unwrap(),
+        '\u{fa11}'
+    );
+    assert_eq!(
         arib_symbols::code_point_to_char(0x7a21).unwrap(),
         '\u{26cc}'
     );
