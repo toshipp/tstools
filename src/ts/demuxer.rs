@@ -1,167 +1,82 @@
 use crate::ts::TSPacket;
 use std::collections::hash_map::{Entry as HashEntry, HashMap};
-use std::error::Error as StdError;
-use std::fmt::{Display, Error, Formatter};
-use std::sync::Arc;
-use std::sync::Mutex;
-use tokio::prelude::{Async, AsyncSink, Sink};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::prelude::{Async, AsyncSink, Future, IntoFuture, Sink};
 
-struct Entry {
-    sender: Sender<TSPacket>,
-    closed: bool,
+pub struct Demuxer<Func, F, S> {
+    sinks: HashMap<u16, S>,
+    sink_making_future: Option<(u16, F)>,
+    sink_maker: Func,
 }
 
-struct Inner {
-    num: usize,
-    senders: HashMap<u16, Entry>,
-    closed: bool,
-}
-
-impl Inner {
-    fn new() -> Inner {
-        Inner {
-            num: 0,
-            senders: HashMap::new(),
-            closed: false,
+impl<Func, F, S> Demuxer<Func, F, S> {
+    pub fn new(f: Func) -> Self {
+        Self {
+            sinks: HashMap::new(),
+            sink_making_future: None,
+            sink_maker: f,
         }
     }
 }
 
-pub struct Register {
-    inner: Arc<Mutex<Inner>>,
-}
-
-#[derive(Debug)]
-pub enum RegistrationError {
-    AlreadyRegistered,
-    Closed,
-}
-
-impl RegistrationError {
-    pub fn is_closed(&self) -> bool {
-        match self {
-            RegistrationError::Closed => true,
-            _ => false,
-        }
-    }
-}
-
-impl Display for RegistrationError {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl StdError for RegistrationError {}
-
-impl Register {
-    pub fn try_register(&mut self, pid: u16) -> Result<Receiver<TSPacket>, RegistrationError> {
-        let mut inner = self.inner.lock().unwrap();
-        if inner.closed {
-            return Err(RegistrationError::Closed);
-        }
-        let ret = match inner.senders.entry(pid) {
-            HashEntry::Vacant(entry) => {
-                let (tx, rx) = channel(1);
-                entry.insert(Entry {
-                    sender: tx,
-                    closed: false,
-                });
-                Ok(rx)
-            }
-            _ => Err(RegistrationError::AlreadyRegistered),
-        };
-        if ret.is_ok() {
-            inner.num += 1;
-        }
-        ret
-    }
-}
-
-impl Clone for Register {
-    fn clone(&self) -> Register {
-        Register {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-pub struct Demuxer {
-    inner: Arc<Mutex<Inner>>,
-}
-
-impl Demuxer {
-    pub fn new() -> Demuxer {
-        Demuxer {
-            inner: Arc::new(Mutex::new(Inner::new())),
-        }
-    }
-
-    pub fn register(&self) -> Register {
-        Register {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum DemuxError {
-    Closed,
-}
-
-impl Display for DemuxError {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), Error> {
-        write!(f, "failed to demux")
-    }
-}
-
-impl StdError for DemuxError {}
-
-impl Drop for Demuxer {
-    fn drop(&mut self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.senders.clear();
-        inner.closed = true;
-    }
-}
-
-impl Sink for Demuxer {
+impl<Func, IF, S, E> Sink for Demuxer<Func, IF::Future, S>
+where
+    Func: FnMut(u16) -> IF,
+    IF: IntoFuture<Item = Option<S>, Error = E>,
+    S: Sink<SinkItem = TSPacket, SinkError = E>,
+{
     type SinkItem = TSPacket;
-    type SinkError = DemuxError;
+    type SinkError = E;
 
     fn start_send(
         &mut self,
         item: Self::SinkItem,
     ) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        let mut inner = self.inner.lock().unwrap();
-        if inner.num == 0 {
-            return Err(DemuxError::Closed);
+        if let Some((pid, mut future)) = self.sink_making_future.take() {
+            match future.poll() {
+                Ok(Async::Ready(Some(sink))) => {
+                    self.sinks.insert(pid, sink);
+                }
+                Ok(Async::Ready(None)) => {
+                    return Ok(AsyncSink::Ready);
+                }
+                Ok(Async::NotReady) => {
+                    self.sink_making_future = Some((pid, future));
+                    return Ok(AsyncSink::NotReady(item));
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
         }
-        let pid = item.pid;
-        let mut is_err = false;
-        let ret = match inner.senders.get_mut(&pid) {
-            Some(entry) => {
-                if entry.closed {
-                    Ok(AsyncSink::Ready)
-                } else {
-                    match entry.sender.start_send(item) {
-                        Ok(p) => Ok(p),
-                        Err(_) => {
-                            // when sender returns an error, the channel is closed.
-                            entry.closed = true;
-                            is_err = true;
-                            Ok(AsyncSink::Ready)
-                        }
+
+        let sink = match self.sinks.entry(item.pid) {
+            HashEntry::Occupied(e) => e.into_mut(),
+            HashEntry::Vacant(e) => {
+                let mut future = (self.sink_maker)(item.pid).into_future();
+                match future.poll() {
+                    Ok(Async::Ready(Some(sink))) => e.insert(sink),
+                    Ok(Async::Ready(None)) => {
+                        return Ok(AsyncSink::Ready);
+                    }
+                    Ok(Async::NotReady) => {
+                        self.sink_making_future = Some((item.pid, future));
+                        return Ok(AsyncSink::NotReady(item));
+                    }
+                    Err(e) => {
+                        return Err(e);
                     }
                 }
             }
-            None => Ok(AsyncSink::Ready),
         };
-        if is_err {
-            inner.num -= 1;
+
+        match sink.start_send(item) {
+            Ok(p) => Ok(p),
+            Err(_) => {
+                // When a sink returns an error, the sink becomes permanently unavailable.
+                // BTW, this demuxer is working, the error is ignored.
+                Ok(AsyncSink::Ready)
+            }
         }
-        return ret;
     }
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
