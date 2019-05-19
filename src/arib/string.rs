@@ -10,7 +10,7 @@ where
     AribDecoder::new().decode(iter.into_iter())
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 enum Charset {
     Kanji,
     Alnum,
@@ -328,6 +328,7 @@ impl AribDecoder {
                         } else {
                             Charset::from_termination(s2)
                         };
+                        debug!("{}: g[{}] = {:?}", line!(), pos, code);
                         self.g[pos] = code;
                     }
                     0x24 => {
@@ -339,7 +340,9 @@ impl AribDecoder {
                                     unreachable!();
                                 }
                                 let s4 = next!();
-                                self.g[0] = Charset::from_termination(s4);
+                                let code = Charset::from_termination(s4);
+                                debug!("{}: g[0] = {:?}", line!(), code);
+                                self.g[0] = code;
                             }
                             0x29..=0x2b => {
                                 let s3 = next!();
@@ -351,9 +354,14 @@ impl AribDecoder {
                                 } else {
                                     Charset::from_termination(s3)
                                 };
+                                debug!("{}: g[{}] = {:?}", line!(), pos, code);
                                 self.g[pos] = code;
                             }
-                            _ => self.g[0] = Charset::from_termination(s2),
+                            _ => {
+                                let code = Charset::from_termination(s2);
+                                debug!("{}: g[0] = {:?}", line!(), code);
+                                self.g[0] = code;
+                            }
                         }
                     }
                     _ => {
