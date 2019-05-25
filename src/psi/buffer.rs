@@ -56,10 +56,10 @@ where
             if packet.transport_error_indicator {
                 continue;
             }
-            if packet.data.is_none() {
-                bail!("malformed psi packet, no data")
-            }
-            let mut bytes = &packet.data.unwrap()[..];
+            let mut bytes = match packet.data {
+                Some(ref data) => data.as_ref(),
+                None => bail!("malformed psi packet, no data"),
+            };
 
             if packet.payload_unit_start_indicator {
                 let pointer_field = bytes[0];

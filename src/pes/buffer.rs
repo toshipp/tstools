@@ -79,9 +79,10 @@ where
                 continue;
             }
 
-            if packet.data.is_none() {
-                bail!("no data");
-            }
+            let data = match packet.data {
+                Some(ref data) => data.as_ref(),
+                None => bail!("no data"),
+            };
 
             if packet.payload_unit_start_indicator {
                 let mut bytes = None;
@@ -92,7 +93,7 @@ where
                 self.state = State::Buffering;
                 self.counter = packet.continuity_counter;
                 self.buf.clear();
-                self.buf.extend_from_slice(&packet.data.unwrap()[..]);
+                self.buf.extend_from_slice(data);
 
                 return match bytes {
                     Some(Ok(bytes)) => Ok(Async::Ready(Some(bytes))),
@@ -116,7 +117,7 @@ where
                     bail!("pes packet discontinued");
                 }
 
-                self.buf.extend_from_slice(&packet.data.unwrap()[..]);
+                self.buf.extend_from_slice(data);
             }
         }
     }
