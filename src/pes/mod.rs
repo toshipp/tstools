@@ -103,7 +103,15 @@ impl<'a> PESPacket<'a> {
             body,
         })
     }
+
+    pub fn get_pts(&self) -> Option<u64> {
+        match self.body {
+            PESPacketBody::NormalPESPacketBody(ref body) => body.pts,
+            _ => None,
+        }
+    }
 }
+
 impl<'a> NormalPESPacketBody<'a> {
     fn parse(bytes: &[u8]) -> Result<NormalPESPacketBody<'_>, Error> {
         if bytes.len() < 3 {

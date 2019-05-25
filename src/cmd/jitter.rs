@@ -16,7 +16,6 @@ use tokio::prelude::Stream;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{channel, Sender};
 
-use super::common;
 use crate::pes;
 use crate::psi;
 use crate::ts;
@@ -210,7 +209,7 @@ impl JitterSinkMaker {
                                 if picture_header.len() >= 6 {
                                     let picture_coding_type = (picture_header[5] & 0x38) >> 3;
                                     if picture_coding_type == I_PICTURE {
-                                        return common::get_pts(&pes);
+                                        return pes.get_pts();
                                     }
                                 }
                             }
@@ -232,9 +231,7 @@ impl JitterSinkMaker {
         let apts_tx = self.apts_tx.clone();
         tokio::spawn(
             pes::Buffer::new(rx)
-                .and_then(|bytes| {
-                    pes::PESPacket::parse(&bytes[..]).map(|pes| common::get_pts(&pes))
-                })
+                .and_then(|bytes| pes::PESPacket::parse(&bytes[..]).map(|pes| pes.get_pts()))
                 .filter_map(|x| x)
                 .take(1)
                 .forward(apts_tx)

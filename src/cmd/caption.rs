@@ -19,7 +19,6 @@ use tokio::sync::mpsc::{channel, Sender};
 use serde_derive::Serialize;
 use serde_json;
 
-use super::common;
 use crate::arib;
 use crate::pes;
 use crate::psi;
@@ -194,7 +193,7 @@ impl SinkMaker {
                         return Ok(());
                     }
                     pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
-                        if let Some(pts) = common::get_pts(&pes) {
+                        if let Some(pts) = pes.get_pts() {
                             *base_pts = dbg!(Some(pts));
                         }
                         Ok(())
@@ -213,7 +212,7 @@ impl SinkMaker {
                 .for_each(move |bytes| {
                     pes::PESPacket::parse(&bytes[..]).and_then(|pes| {
                         let base_pts = base_pts.lock().unwrap();
-                        let offset = match (common::get_pts(&pes), *base_pts) {
+                        let offset = match (pes.get_pts(), *base_pts) {
                             (Some(now), Some(base)) => now - base,
                             _ => return Ok(()),
                         };
