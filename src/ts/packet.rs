@@ -6,12 +6,12 @@ use tokio::codec::Decoder;
 const TS_PACKET_LENGTH: usize = 188;
 const SYNC_BYTE: u8 = 0x47;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AdaptationField {
     raw: Bytes,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TSPacket {
     pub transport_error_indicator: bool,
     pub payload_unit_start_indicator: bool,

@@ -1,16 +1,16 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use env_logger;
 use log::{info, trace};
 
+use failure::{bail, Error};
 use futures::future::lazy;
 use futures::sink::Sink;
 use serde_derive::Serialize;
 use serde_json;
 use tokio::codec::FramedRead;
-use tokio::fs::File;
+use tokio::io::stdin;
 use tokio::prelude::future::{Future, IntoFuture};
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
@@ -18,6 +18,7 @@ use tokio::sync::mpsc::{channel, Sender};
 
 use crate::pes;
 use crate::psi;
+use crate::stream::{cueable, interruptible};
 use crate::ts;
 
 struct FindPidSinkMaker {
@@ -127,29 +128,32 @@ impl FindPidSinkMaker {
     }
 }
 
-fn find_pid(input: PathBuf) -> impl Future<Item = Option<(u16, u16)>, Error = ()> {
+fn find_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
+    s: S,
+) -> impl Future<Item = (impl Stream<Item = ts::TSPacket, Error = Error>, u16, u16), Error = Error>
+{
     lazy(move || {
         let (apid_tx, apid_rx) = channel(1);
         let (vpid_tx, vpid_rx) = channel(1);
         let mut sink_maker = FindPidSinkMaker::new(apid_tx, vpid_tx);
         let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| Ok(sink_maker.make_sink(pid)));
-        File::open(input)
-            .map_err(|e| info!("open error {}", e))
-            .and_then(|file| {
-                let decoder = FramedRead::new(file, ts::TSPacketDecoder::new());
-                let pid_receive = apid_rx
-                    .zip(vpid_rx)
-                    .into_future()
-                    .map(|(x, _)| x)
-                    .map_err(|(e, _)| info!("recv err {:?}", e));
-
-                let demux = decoder
-                    .forward(demuxer)
-                    .map(|_| ())
-                    .map_err(|e| info!("decode err {:?}", e));
-                tokio::spawn(demux);
-
-                pid_receive
+        let (stream, interrupter) = interruptible(cueable(s));
+        let avpid_future = apid_rx
+            .zip(vpid_rx)
+            .into_future()
+            .map(move |(x, _)| {
+                interrupter.interrupt();
+                x
+            })
+            .map_err(|e| info!("err: {:?}", e));
+        stream
+            .forward(demuxer)
+            .map(|(s, _)| s.into_inner().cue())
+            .map_err(|e| info!("err: {:?}", e))
+            .join(avpid_future)
+            .then(|r| match r {
+                Ok((s, Some((apid, vpid)))) => Ok((s, apid, vpid)),
+                _ => bail!("avpid not found"),
             })
     })
 }
@@ -252,43 +256,39 @@ impl JitterSinkMaker {
     }
 }
 
-pub fn run(input: PathBuf) {
+pub fn run() {
     env_logger::init();
 
-    let proc = find_pid(input.clone())
-        .map(|x| x.ok_or(()))
-        .flatten()
-        .and_then(|(apid, vpid)| {
+    let proc = find_pid(FramedRead::new(stdin(), ts::TSPacketDecoder::new()))
+        .map_err(|e| info!("err: {:?}", e))
+        .and_then(|(s, apid, vpid)| {
             let (apts_tx, apts_rx) = channel(1);
             let (vpts_tx, vpts_rx) = channel(1);
             let mut sink_maker = JitterSinkMaker::new(apid, vpid, apts_tx, vpts_tx);
             let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| Ok(sink_maker.make_sink(pid)));
             info!("apid, vpid {}, {}", apid, vpid);
 
-            File::open(input)
-                .map_err(|e| info!("open error {}", e))
-                .and_then(|file| {
-                    let decoder = FramedRead::new(file, ts::TSPacketDecoder::new());
-                    let demux = decoder
-                        .forward(demuxer)
-                        .map(|_| ())
-                        .map_err(|e| info!("decode err {:?}", e));
-                    tokio::spawn(demux);
+            let (stream, interrupter) = interruptible(s);
+            tokio::spawn(
+                stream
+                    .forward(demuxer.sink_map_err(|e| Error::from(e)))
+                    .map(|_| ())
+                    .map_err(|e| info!("decode err {:?}", e)),
+            );
 
-                    apts_rx
-                        .zip(vpts_rx)
-                        .take(1)
-                        .for_each(|(apts, vpts)| {
-                            let jitter = Jitter {
-                                jitter: f64::from((vpts - apts) as u32) / 90000f64,
-                            };
-                            info!("vpts {} apts {}", vpts, apts);
-                            println!("{}", serde_json::to_string(&jitter).unwrap());
-                            Ok(())
-                        })
-                        .map_err(|e| info!("{:?}", e))
+            apts_rx
+                .zip(vpts_rx)
+                .take(1)
+                .for_each(move |(apts, vpts)| {
+                    let jitter = Jitter {
+                        jitter: f64::from((vpts - apts) as u32) / 90000f64,
+                    };
+                    info!("vpts {} apts {}", vpts, apts);
+                    println!("{}", serde_json::to_string(&jitter).unwrap());
+                    interrupter.interrupt();
+                    Ok(())
                 })
-                .map(|_| ())
+                .map_err(|e| info!("{:?}", e))
         });
 
     let mut rt = Builder::new().core_threads(2).build().unwrap();

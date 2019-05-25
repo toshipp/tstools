@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use structopt::StructOpt;
 
 #[macro_use]
@@ -8,6 +7,7 @@ mod cmd;
 mod crc32;
 mod pes;
 mod psi;
+mod stream;
 mod ts;
 
 #[derive(StructOpt)]
@@ -17,10 +17,7 @@ enum Opt {
     #[structopt(name = "caption")]
     Caption,
     #[structopt(name = "jitter")]
-    Jitter {
-        #[structopt(parse(from_os_str))]
-        input: PathBuf,
-    },
+    Jitter,
 }
 
 fn main() {
@@ -32,8 +29,8 @@ fn main() {
         Opt::Caption => {
             cmd::caption::run();
         }
-        Opt::Jitter { input } => {
-            cmd::jitter::run(input);
+        Opt::Jitter => {
+            cmd::jitter::run();
         }
     }
 }
