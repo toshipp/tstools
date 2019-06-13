@@ -28,7 +28,7 @@ impl<S> Cueable<S>
 where
     S: Stream,
 {
-    pub fn cue(self) -> Cued<S> {
+    pub fn cue_up(self) -> Cued<S> {
         Cued {
             inner: self.inner,
             items: self.items,

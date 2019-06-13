@@ -148,7 +148,7 @@ fn find_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
             .map_err(|e| info!("err: {:?}", e));
         stream
             .forward(demuxer)
-            .map(|(s, _)| s.into_inner().cue())
+            .map(|(s, _)| s.into_inner().cue_up())
             .map_err(|e| info!("err: {:?}", e))
             .join(avpid_future)
             .then(|r| match r {

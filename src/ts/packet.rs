@@ -3,7 +3,7 @@ use failure::bail;
 use failure::Error;
 use tokio::codec::Decoder;
 
-const TS_PACKET_LENGTH: usize = 188;
+pub const TS_PACKET_LENGTH: usize = 188;
 const SYNC_BYTE: u8 = 0x47;
 
 #[derive(Debug, Clone)]
@@ -22,6 +22,12 @@ pub struct TSPacket {
     pub adaptation_field: Option<AdaptationField>,
     pub data: Option<Bytes>,
     raw: Bytes,
+}
+
+impl TSPacket {
+    pub fn into_raw(self) -> Bytes {
+        self.raw
+    }
 }
 
 pub struct TSPacketDecoder {}

@@ -18,6 +18,8 @@ enum Opt {
     Caption,
     #[structopt(name = "jitter")]
     Jitter,
+    #[structopt(name = "clean")]
+    Clean,
 }
 
 fn main() {
@@ -31,6 +33,9 @@ fn main() {
         }
         Opt::Jitter => {
             cmd::jitter::run();
+        }
+        Opt::Clean => {
+            cmd::clean::run();
         }
     }
 }
