@@ -5,6 +5,8 @@ use failure::{bail, Error};
 use tokio::prelude::{Future, Stream};
 
 use crate::arib::caption::is_caption;
+use crate::h262;
+use crate::pes;
 use crate::psi;
 use crate::ts;
 
@@ -103,5 +105,34 @@ fn find_main_pmt_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
         .and_then(|(pids, s)| match pids {
             Some(pids) => Ok((pids, s)),
             None => bail!("no pid found"),
+        })
+}
+
+pub fn find_first_picture_pts<S: Stream<Item = ts::TSPacket, Error = Error>>(
+    pid: u16,
+    s: S,
+) -> impl Future<Item = (u64, S), Error = Error> {
+    let video_stream = s.filter(move |packet| packet.pid == pid);
+    pes::Buffer::new(video_stream)
+        .filter_map(|bytes| {
+            let pes = match pes::PESPacket::parse(&bytes[..]) {
+                Ok(pes) => pes,
+                Err(e) => {
+                    info!("pes parse error: {:?}", e);
+                    return None;
+                }
+            };
+            if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
+                if h262::is_i_picture(body.pes_packet_data_byte) {
+                    return pes.get_pts();
+                }
+            }
+            None
+        })
+        .into_future()
+        .map_err(|(e, _)| e)
+        .and_then(|(pts, s)| match pts {
+            Some(pts) => Ok((pts, s.into_inner().into_inner().into_inner())),
+            None => bail!("no pts found"),
         })
 }

@@ -16,7 +16,6 @@ use serde_json;
 
 use super::common;
 use crate::arib;
-use crate::h262;
 use crate::pes;
 use crate::stream::cueable;
 use crate::ts;
@@ -73,35 +72,6 @@ fn dump_caption<'a>(
     Ok(())
 }
 
-fn find_first_picture_pts<S: Stream<Item = ts::TSPacket, Error = Error>>(
-    pid: u16,
-    s: S,
-) -> impl Future<Item = (u64, S), Error = Error> {
-    let video_stream = s.filter(move |packet| packet.pid == pid);
-    pes::Buffer::new(video_stream)
-        .filter_map(|bytes| {
-            let pes = match pes::PESPacket::parse(&bytes[..]) {
-                Ok(pes) => pes,
-                Err(e) => {
-                    info!("pes parse error: {:?}", e);
-                    return None;
-                }
-            };
-            if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
-                if h262::is_i_picture(body.pes_packet_data_byte) {
-                    return pes.get_pts();
-                }
-            }
-            None
-        })
-        .into_future()
-        .map_err(|(e, _)| e)
-        .and_then(|(pts, s)| match pts {
-            Some(pts) => Ok((pts, s.into_inner().into_inner().into_inner())),
-            None => bail!("no pts found"),
-        })
-}
-
 fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
     pid: u16,
     base_pts: u64,
@@ -151,10 +121,12 @@ pub fn run() {
             .and_then(|(meta, s)| {
                 let packets = s.cue_up();
                 let cueable_packets = cueable(packets);
-                find_first_picture_pts(meta.video_pid, cueable_packets).and_then(move |(pts, s)| {
-                    let packets = s.cue_up();
-                    process_captions(meta.caption_pid, pts, packets)
-                })
+                common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
+                    move |(pts, s)| {
+                        let packets = s.cue_up();
+                        process_captions(meta.caption_pid, pts, packets)
+                    },
+                )
             })
             .map_err(|e| info!("error: {}", e))
     });
