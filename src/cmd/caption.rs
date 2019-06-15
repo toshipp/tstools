@@ -14,26 +14,12 @@ use tokio::runtime::Builder;
 use serde_derive::Serialize;
 use serde_json;
 
+use super::common;
 use crate::arib;
 use crate::h262;
 use crate::pes;
-use crate::psi;
 use crate::stream::cueable;
 use crate::ts;
-
-fn is_caption_component(desc: &psi::Descriptor) -> bool {
-    if let psi::Descriptor::StreamIdentifierDescriptor(sid) = desc {
-        return arib::caption::is_non_partial_reception_caption(sid.component_tag);
-    }
-    false
-}
-
-fn is_caption(si: &psi::StreamInfo) -> bool {
-    if si.stream_type == psi::STREAM_TYPE_PES_PRIVATE_DATA {
-        return si.descriptors.iter().any(is_caption_component);
-    }
-    false
-}
 
 fn sync_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>, Error> {
     if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
@@ -85,98 +71,6 @@ fn dump_caption<'a>(
         }
     }
     Ok(())
-}
-
-fn find_main_pmt_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
-    s: S,
-) -> impl Future<Item = (u16, S), Error = Error> {
-    let pat_stream = s.filter(|packet| packet.pid == ts::PAT_PID);
-    psi::Buffer::new(pat_stream)
-        .filter_map(move |bytes| {
-            let bytes = &bytes[..];
-            let table_id = bytes[0];
-            if table_id == psi::PROGRAM_ASSOCIATION_SECTION {
-                let pas = match psi::ProgramAssociationSection::parse(bytes) {
-                    Ok(pas) => pas,
-                    Err(e) => {
-                        info!("pat parse error: {:?}", e);
-                        return None;
-                    }
-                };
-                for (program_number, pid) in pas.program_association {
-                    if program_number != 0 {
-                        // not network pid
-                        return Some(pid);
-                    }
-                }
-            }
-            None
-        })
-        .into_future()
-        .map(|(pids, stream)| (pids, stream.into_inner().into_inner().into_inner()))
-        .map_err(|(e, _)| e)
-        .and_then(|(pids, s)| match pids {
-            Some(pids) => Ok((pids, s)),
-            None => bail!("no pid found"),
-        })
-}
-
-struct Meta {
-    audio_pid: u16,
-    video_pid: u16,
-    caption_pid: u16,
-}
-
-fn find_meta<S: Stream<Item = ts::TSPacket, Error = Error>>(
-    pid: u16,
-    s: S,
-) -> impl Future<Item = (Meta, S), Error = Error> {
-    let pmt_stream = s.filter(move |packet| packet.pid == pid);
-    psi::Buffer::new(pmt_stream)
-        .filter_map(move |bytes| {
-            let bytes = &bytes[..];
-            let table_id = bytes[0];
-            if table_id == psi::TS_PROGRAM_MAP_SECTION {
-                let pms = match psi::TSProgramMapSection::parse(bytes) {
-                    Ok(pms) => pms,
-                    Err(e) => {
-                        info!("pmt parse error: {:?}", e);
-                        return None;
-                    }
-                };
-                let mut video_pid = None;
-                let mut audio_pid = None;
-                let mut caption_pid = None;
-                for si in pms.stream_info.iter() {
-                    if caption_pid.is_none() && is_caption(&si) {
-                        caption_pid = Some(si.elementary_pid);
-                    }
-                    if video_pid.is_none() && si.stream_type == psi::STREAM_TYPE_VIDEO {
-                        video_pid = Some(si.elementary_pid);
-                    }
-                    if audio_pid.is_none() && si.stream_type == psi::STREAM_TYPE_ADTS {
-                        audio_pid = Some(si.elementary_pid);
-                    }
-                }
-                match (video_pid, audio_pid, caption_pid) {
-                    (Some(video_pid), Some(audio_pid), Some(caption_pid)) => {
-                        return Some(Meta {
-                            audio_pid,
-                            video_pid,
-                            caption_pid,
-                        })
-                    }
-                    _ => {}
-                }
-            }
-            None
-        })
-        .into_future()
-        .map_err(|(e, _)| e)
-        .and_then(|(meta, s)| match meta {
-            Some(meta) => Ok((meta, s.into_inner().into_inner().into_inner())),
-            None => bail!("no meta found"),
-        })
 }
 
 fn find_first_picture_pts<S: Stream<Item = ts::TSPacket, Error = Error>>(
@@ -253,17 +147,13 @@ pub fn run() {
     let proc = lazy(|| {
         let packets = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
         let cueable_packets = cueable(packets);
-        find_main_pmt_pid(cueable_packets)
-            .and_then(|(pids, s)| {
-                find_meta(pids, s).and_then(|(meta, s)| {
+        common::find_main_meta(cueable_packets)
+            .and_then(|(meta, s)| {
+                let packets = s.cue_up();
+                let cueable_packets = cueable(packets);
+                find_first_picture_pts(meta.video_pid, cueable_packets).and_then(move |(pts, s)| {
                     let packets = s.cue_up();
-                    let cueable_packets = cueable(packets);
-                    find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
-                        move |(pts, s)| {
-                            let packets = s.cue_up();
-                            process_captions(meta.caption_pid, pts, packets)
-                        },
-                    )
+                    process_captions(meta.caption_pid, pts, packets)
                 })
             })
             .map_err(|e| info!("error: {}", e))

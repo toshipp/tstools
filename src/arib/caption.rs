@@ -1,6 +1,8 @@
 use failure::bail;
 use failure::Error;
 
+use crate::psi;
+
 #[derive(Debug)]
 pub struct DataGroup<'a> {
     pub data_group_id: u8,
@@ -313,9 +315,23 @@ impl<'a> DataUnit<'a> {
     }
 }
 
-pub fn is_non_partial_reception_caption(component_tag: u8) -> bool {
+fn is_non_partial_reception_caption(component_tag: u8) -> bool {
     match component_tag {
         0x30..=0x37 => true,
         _ => false,
     }
+}
+
+fn is_caption_component(desc: &psi::Descriptor) -> bool {
+    if let psi::Descriptor::StreamIdentifierDescriptor(sid) = desc {
+        return is_non_partial_reception_caption(sid.component_tag);
+    }
+    false
+}
+
+pub fn is_caption(si: &psi::StreamInfo) -> bool {
+    if si.stream_type == psi::STREAM_TYPE_PES_PRIVATE_DATA {
+        return si.descriptors.iter().any(is_caption_component);
+    }
+    false
 }
