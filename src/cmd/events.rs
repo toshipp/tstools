@@ -165,8 +165,8 @@ fn packets_to_events<S: Stream<Item = ts::TSPacket, Error = E>, E: Fail>(
 }
 
 fn into_event_stream<S: Stream<Item = ts::TSPacket, Error = Error> + Send + 'static>(
-    s: S,
     service_id: u16,
+    s: S,
 ) -> Receiver<Event> {
     let (event_tx, event_rx) = channel(1);
     let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| -> Result<_, Error> {
@@ -210,7 +210,7 @@ pub fn run() {
         find_service_id(cueable_packets)
             .and_then(|(sid, s)| {
                 let packets = s.cue_up();
-                let events = into_event_stream(packets, sid);
+                let events = into_event_stream(sid, packets);
                 into_event_map(events).map_err(|e| Error::from(e))
             })
             .map(|event_map| {
