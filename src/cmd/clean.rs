@@ -19,7 +19,7 @@ use failure::{bail, Error};
 
 use crate::crc32;
 use crate::psi;
-use crate::stream::{cueable, interruptible};
+use crate::stream::{cueable, interruptible, Cued};
 use crate::ts;
 
 struct FindKeepPidsMaker {
@@ -136,33 +136,27 @@ impl FindKeepPidsMaker {
         tx
     }
 
-    fn make_sink(&mut self, pid: u16) -> Option<Sender<ts::TSPacket>> {
+    fn make_sink(&mut self, pid: u16) -> Result<Option<Sender<ts::TSPacket>>, Error> {
         if pid == 0 {
-            return Some(self.make_pat_sink());
+            return Ok(Some(self.make_pat_sink()));
         }
         {
             let pmt_pids = self.pmt_pids.lock().unwrap();
             if pmt_pids.contains(&pid) {
-                return Some(self.make_pmt_sink(pid));
+                return Ok(Some(self.make_pmt_sink(pid)));
             }
         }
-        None
+        Ok(None)
     }
 }
 
 fn find_keep_pids<S: Stream<Item = ts::TSPacket, Error = Error>>(
     s: S,
-) -> impl Future<
-    Item = (
-        impl Stream<Item = ts::TSPacket, Error = Error>,
-        HashSet<u16>,
-    ),
-    Error = Error,
-> {
+) -> impl Future<Item = (Cued<S>, HashSet<u16>), Error = Error> {
     let (s, interuppter) = interruptible(cueable(s));
     let (tx, rx) = channel(1);
     let mut sink_maker = FindKeepPidsMaker::new(tx);
-    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| Ok(sink_maker.make_sink(pid)));
+    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| sink_maker.make_sink(pid));
     let pids_future = rx
         .filter(|pids| !pids.is_empty())
         .into_future()

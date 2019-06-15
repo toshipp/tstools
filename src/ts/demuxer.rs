@@ -2,14 +2,14 @@ use crate::ts::TSPacket;
 use std::collections::hash_map::{Entry as HashEntry, HashMap};
 use tokio::prelude::{Async, AsyncSink, Future, IntoFuture, Sink};
 
-pub struct Demuxer<Func, F, S> {
+pub struct Demuxer<Fun, F, S> {
     sinks: HashMap<u16, S>,
     sink_making_future: Option<(u16, F)>,
-    sink_maker: Func,
+    sink_maker: Fun,
 }
 
-impl<Func, F, S> Demuxer<Func, F, S> {
-    pub fn new(f: Func) -> Self {
+impl<Fun, F, S> Demuxer<Fun, F, S> {
+    pub fn new(f: Fun) -> Self {
         Self {
             sinks: HashMap::new(),
             sink_making_future: None,
@@ -18,14 +18,14 @@ impl<Func, F, S> Demuxer<Func, F, S> {
     }
 }
 
-impl<Func, IF, S, E> Sink for Demuxer<Func, IF::Future, S>
+impl<Func, IF, S, E1, E2> Sink for Demuxer<Func, IF::Future, S>
 where
     Func: FnMut(u16) -> IF,
-    IF: IntoFuture<Item = Option<S>, Error = E>,
-    S: Sink<SinkItem = TSPacket, SinkError = E>,
+    IF: IntoFuture<Item = Option<S>, Error = E1>,
+    S: Sink<SinkItem = TSPacket, SinkError = E2>,
 {
     type SinkItem = TSPacket;
-    type SinkError = E;
+    type SinkError = E1;
 
     fn start_send(
         &mut self,

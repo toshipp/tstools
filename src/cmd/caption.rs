@@ -1,4 +1,4 @@
-use failure;
+use failure::Error;
 
 use env_logger;
 use log::{debug, info};
@@ -38,9 +38,7 @@ fn is_caption(si: &psi::StreamInfo) -> bool {
     false
 }
 
-fn sync_caption<'a>(
-    pes: &'a pes::PESPacket,
-) -> Result<arib::caption::DataGroup<'a>, failure::Error> {
+fn sync_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>, Error> {
     if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
         arib::pes::SynchronizedPESData::parse(body.pes_packet_data_byte)
             .and_then(|data| arib::caption::DataGroup::parse(data.synchronized_pes_data_byte))
@@ -49,9 +47,7 @@ fn sync_caption<'a>(
     }
 }
 
-fn async_caption<'a>(
-    pes: &'a pes::PESPacket,
-) -> Result<arib::caption::DataGroup<'a>, failure::Error> {
+fn async_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>, Error> {
     if let pes::PESPacketBody::DataBytes(bytes) = pes.body {
         arib::pes::AsynchronousPESData::parse(bytes)
             .and_then(|data| arib::caption::DataGroup::parse(data.asynchronous_pes_data_byte))
@@ -60,9 +56,7 @@ fn async_caption<'a>(
     }
 }
 
-fn get_caption<'a>(
-    pes: &'a pes::PESPacket,
-) -> Result<Option<arib::caption::DataGroup<'a>>, failure::Error> {
+fn get_caption<'a>(pes: &'a pes::PESPacket) -> Result<Option<arib::caption::DataGroup<'a>>, Error> {
     match pes.stream_id {
         arib::pes::SYNCHRONIZED_PES_STREAM_ID => sync_caption(pes).map(Some),
         arib::pes::ASYNCHRONOUS_PES_STREAM_ID => async_caption(pes).map(Some),
@@ -83,7 +77,7 @@ struct Caption {
 fn dump_caption<'a>(
     data_units: &Vec<arib::caption::DataUnit<'a>>,
     offset: u64,
-) -> Result<(), failure::Error> {
+) -> Result<(), Error> {
     for du in data_units {
         let caption_string = arib::string::decode_to_utf8(du.data_unit_data)?;
         if !caption_string.is_empty() {
@@ -234,29 +228,29 @@ impl SinkMaker {
         tx
     }
 
-    fn make_sink(&mut self, pid: u16) -> Option<Sender<ts::TSPacket>> {
+    fn make_sink(&mut self, pid: u16) -> Result<Option<Sender<ts::TSPacket>>, Error> {
         if pid == 0 {
-            return Some(self.make_pat_sink());
+            return Ok(Some(self.make_pat_sink()));
         }
         {
             let pmt_pids = self.pmt_pids.lock().unwrap();
             if pmt_pids.contains(&pid) {
-                return Some(self.make_pmt_sink());
+                return Ok(Some(self.make_pmt_sink()));
             }
         }
         {
             let video_pids = self.video_pids.lock().unwrap();
             if video_pids.contains(&pid) {
-                return Some(self.make_video_sink());
+                return Ok(Some(self.make_video_sink()));
             }
         }
         {
             let caption_pids = self.caption_pids.lock().unwrap();
             if caption_pids.contains(&pid) {
-                return Some(self.make_caption_sink());
+                return Ok(Some(self.make_caption_sink()));
             }
         }
-        None
+        Ok(None)
     }
 }
 
@@ -265,7 +259,7 @@ pub fn run() {
 
     let proc = lazy(|| {
         let mut sink_maker = SinkMaker::new();
-        let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| Ok(sink_maker.make_sink(pid)));
+        let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| sink_maker.make_sink(pid));
 
         let decoder = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
         decoder

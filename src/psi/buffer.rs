@@ -34,6 +34,10 @@ impl<S> Buffer<S> {
             buf: BytesMut::with_capacity(INITIAL_BUFFER),
         }
     }
+
+    pub fn into_inner(self) -> S {
+        return self.inner;
+    }
 }
 
 impl<S, E> Stream for Buffer<S>

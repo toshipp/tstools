@@ -18,7 +18,7 @@ use tokio::sync::mpsc::{channel, Sender};
 
 use crate::pes;
 use crate::psi;
-use crate::stream::{cueable, interruptible};
+use crate::stream::{cueable, interruptible, Cued};
 use crate::ts;
 
 struct FindPidSinkMaker {
@@ -114,29 +114,28 @@ impl FindPidSinkMaker {
         tx
     }
 
-    fn make_sink(&mut self, pid: u16) -> Option<Sender<ts::TSPacket>> {
+    fn make_sink(&mut self, pid: u16) -> Result<Option<Sender<ts::TSPacket>>, Error> {
         if pid == 0 {
-            return Some(self.make_pat_sink());
+            return Ok(Some(self.make_pat_sink()));
         }
         {
             let pmt_pids = self.pmt_pids.lock().unwrap();
             if pmt_pids.contains(&pid) {
-                return Some(self.make_pmt_sink());
+                return Ok(Some(self.make_pmt_sink()));
             }
         }
-        None
+        Ok(None)
     }
 }
 
 fn find_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
     s: S,
-) -> impl Future<Item = (impl Stream<Item = ts::TSPacket, Error = Error>, u16, u16), Error = Error>
-{
+) -> impl Future<Item = (Cued<S>, u16, u16), Error = Error> {
     lazy(move || {
         let (apid_tx, apid_rx) = channel(1);
         let (vpid_tx, vpid_rx) = channel(1);
         let mut sink_maker = FindPidSinkMaker::new(apid_tx, vpid_tx);
-        let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| Ok(sink_maker.make_sink(pid)));
+        let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| sink_maker.make_sink(pid));
         let (stream, interrupter) = interruptible(cueable(s));
         let avpid_future = apid_rx
             .zip(vpid_rx)
@@ -265,7 +264,9 @@ pub fn run() {
             let (apts_tx, apts_rx) = channel(1);
             let (vpts_tx, vpts_rx) = channel(1);
             let mut sink_maker = JitterSinkMaker::new(apid, vpid, apts_tx, vpts_tx);
-            let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| Ok(sink_maker.make_sink(pid)));
+            let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| -> Result<_, Error> {
+                Ok(sink_maker.make_sink(pid))
+            });
             info!("apid, vpid {}, {}", apid, vpid);
 
             let (stream, interrupter) = interruptible(s);
