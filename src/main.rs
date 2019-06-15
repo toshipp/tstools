@@ -5,6 +5,7 @@ mod util;
 mod arib;
 mod cmd;
 mod crc32;
+mod h262;
 mod pes;
 mod psi;
 mod stream;

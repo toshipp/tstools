@@ -33,6 +33,10 @@ impl<S> Buffer<S> {
         }
     }
 
+    pub fn into_inner(self) -> S {
+        self.inner
+    }
+
     fn get_bytes(&mut self) -> Result<Bytes, failure::Error> {
         if self.buf.len() < 6 {
             bail!("not enough data");
