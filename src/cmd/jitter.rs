@@ -1,160 +1,45 @@
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
-
 use env_logger;
-use log::{info, trace};
+use log::info;
 
 use failure::{bail, Error};
 use futures::future::lazy;
-use futures::sink::Sink;
+
 use serde_derive::Serialize;
 use serde_json;
 use tokio::codec::FramedRead;
 use tokio::io::stdin;
-use tokio::prelude::future::{Future, IntoFuture};
+use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
-use tokio::sync::mpsc::{channel, Sender};
 
+use super::common;
 use crate::pes;
-use crate::psi;
-use crate::stream::{cueable, interruptible, Cued};
+
+use crate::stream::cueable;
 use crate::ts;
 
-struct FindPidSinkMaker {
-    apid_tx: Sender<u16>,
-    vpid_tx: Sender<u16>,
-    pmt_pids: Arc<Mutex<HashSet<u16>>>,
-}
-
-impl FindPidSinkMaker {
-    fn new(apid_tx: Sender<u16>, vpid_tx: Sender<u16>) -> Self {
-        Self {
-            apid_tx,
-            vpid_tx,
-            pmt_pids: Arc::new(Mutex::new(HashSet::new())),
-        }
-    }
-
-    fn make_pat_sink(&self) -> Sender<ts::TSPacket> {
-        let (tx, rx) = channel(1);
-        let pmt_pids = self.pmt_pids.clone();
-        tokio::spawn(
-            psi::Buffer::new(rx)
-                .take_while(move |bytes| {
-                    let bytes = &bytes[..];
-                    let table_id = bytes[0];
-                    if table_id == psi::PROGRAM_ASSOCIATION_SECTION {
-                        let pas = match psi::ProgramAssociationSection::parse(bytes) {
-                            Ok(pas) => pas,
-                            Err(e) => {
-                                info!("err {}: {:#?}", line!(), e);
-                                return Ok(true);
-                            }
-                        };
-                        for (program_number, pid) in pas.program_association {
-                            if program_number != 0 {
-                                // not network pid
-                                let mut pmt_pids = pmt_pids.lock().unwrap();
-                                pmt_pids.insert(pid);
-                            }
-                        }
-                    }
-                    Ok(true)
-                })
-                .for_each(|_| Ok(()))
-                .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-        );
-        tx
-    }
-
-    fn make_pmt_sink(&self) -> Sender<ts::TSPacket> {
-        let (tx, rx) = channel(1);
-        let apid_tx = self.apid_tx.clone();
-        let vpid_tx = self.vpid_tx.clone();
-        tokio::spawn(
-            psi::Buffer::new(rx)
-                .map(move |bytes| {
-                    let bytes = &bytes[..];
-                    let table_id = bytes[0];
-                    let mut apid = None;
-                    let mut vpid = None;
-                    if table_id == psi::TS_PROGRAM_MAP_SECTION {
-                        match psi::TSProgramMapSection::parse(bytes) {
-                            Ok(pms) => {
-                                trace!("program map section: {:#?}", pms);
-                                for si in pms.stream_info.iter() {
-                                    if si.stream_type == psi::STREAM_TYPE_ADTS {
-                                        apid = Some(si.elementary_pid);
-                                    }
-                                    if si.stream_type == psi::STREAM_TYPE_VIDEO {
-                                        vpid = Some(si.elementary_pid);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                info!("err {}: {:#?}", line!(), e);
-                            }
-                        }
-                    }
-                    (apid, vpid)
-                })
-                .filter_map(|x| match x {
-                    (Some(apid), Some(vpid)) => Some((apid, vpid)),
-                    _ => None,
-                })
-                .for_each(move |(apid, vpid)| {
-                    (apid_tx.clone().send(apid), vpid_tx.clone().send(vpid))
-                        .into_future()
-                        .map(|_| ())
-                        .map_err(|e| e.into())
-                })
-                .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-        );
-        tx
-    }
-
-    fn make_sink(&mut self, pid: u16) -> Result<Option<Sender<ts::TSPacket>>, Error> {
-        if pid == 0 {
-            return Ok(Some(self.make_pat_sink()));
-        }
-        {
-            let pmt_pids = self.pmt_pids.lock().unwrap();
-            if pmt_pids.contains(&pid) {
-                return Ok(Some(self.make_pmt_sink()));
-            }
-        }
-        Ok(None)
-    }
-}
-
-fn find_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
+fn find_first_audio_pts<S: Stream<Item = ts::TSPacket, Error = Error>>(
+    pid: u16,
     s: S,
-) -> impl Future<Item = (Cued<S>, u16, u16), Error = Error> {
-    lazy(move || {
-        let (apid_tx, apid_rx) = channel(1);
-        let (vpid_tx, vpid_rx) = channel(1);
-        let mut sink_maker = FindPidSinkMaker::new(apid_tx, vpid_tx);
-        let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| sink_maker.make_sink(pid));
-        let (stream, interrupter) = interruptible(cueable(s));
-        let avpid_future = apid_rx
-            .zip(vpid_rx)
-            .into_future()
-            .map(move |(x, _)| {
-                interrupter.interrupt();
-                x
-            })
-            .map_err(|e| info!("err: {:?}", e));
-        stream
-            .forward(demuxer)
-            .map(|(s, _)| s.into_inner().cue_up())
-            .map_err(|e| info!("err: {:?}", e))
-            .join(avpid_future)
-            .then(|r| match r {
-                Ok((s, Some((apid, vpid)))) => Ok((s, apid, vpid)),
-                _ => bail!("avpid not found"),
-            })
-    })
+) -> impl Future<Item = u64, Error = Error> {
+    let audio_stream = s.filter(move |packet| packet.pid == pid);
+    pes::Buffer::new(audio_stream)
+        .filter_map(|bytes| {
+            let pes = match pes::PESPacket::parse(&bytes[..]) {
+                Ok(pes) => pes,
+                Err(e) => {
+                    info!("pes parse error: {:?}", e);
+                    return None;
+                }
+            };
+            pes.get_pts()
+        })
+        .into_future()
+        .map_err(|(e, _)| e)
+        .and_then(|(pts, _)| match pts {
+            Some(pts) => Ok(pts),
+            None => bail!("no pts found"),
+        })
 }
 
 #[derive(Serialize)]
@@ -162,135 +47,32 @@ struct Jitter {
     jitter: f64,
 }
 
-const PICTURE_START_CODE: &[u8] = &[0, 0, 1, 0];
-const I_PICTURE: u8 = 1;
-
-fn index_pattern(pattern: &[u8], seq: &[u8]) -> Option<usize> {
-    if pattern.len() > seq.len() {
-        return None;
-    }
-    'outer: for i in 0..seq.len() - pattern.len() {
-        for j in 0..pattern.len() {
-            if seq[i + j] != pattern[j] {
-                continue 'outer;
-            }
-        }
-        return Some(i);
-    }
-    None
-}
-
-struct JitterSinkMaker {
-    apid: u16,
-    vpid: u16,
-    apts_tx: Sender<u64>,
-    vpts_tx: Sender<u64>,
-}
-
-impl JitterSinkMaker {
-    fn new(apid: u16, vpid: u16, apts_tx: Sender<u64>, vpts_tx: Sender<u64>) -> Self {
-        Self {
-            apid,
-            vpid,
-            apts_tx,
-            vpts_tx,
-        }
-    }
-
-    fn make_video_sink(&self) -> Sender<ts::TSPacket> {
-        let (tx, rx) = channel(1);
-        let vpts_tx = self.vpts_tx.clone();
-        tokio::spawn(
-            pes::Buffer::new(rx)
-                .and_then(|bytes| {
-                    pes::PESPacket::parse(&bytes[..]).map(|pes| {
-                        if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
-                            if let Some(index) =
-                                index_pattern(PICTURE_START_CODE, body.pes_packet_data_byte)
-                            {
-                                let picture_header = &body.pes_packet_data_byte[index..];
-                                if picture_header.len() >= 6 {
-                                    let picture_coding_type = (picture_header[5] & 0x38) >> 3;
-                                    if picture_coding_type == I_PICTURE {
-                                        return pes.get_pts();
-                                    }
-                                }
-                            }
-                        }
-                        None
-                    })
-                })
-                .filter_map(|x| x)
-                .take(1)
-                .forward(vpts_tx)
-                .map(|_| ())
-                .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-        );
-        tx
-    }
-
-    fn make_audio_sink(&self) -> Sender<ts::TSPacket> {
-        let (tx, rx) = channel(1);
-        let apts_tx = self.apts_tx.clone();
-        tokio::spawn(
-            pes::Buffer::new(rx)
-                .and_then(|bytes| pes::PESPacket::parse(&bytes[..]).map(|pes| pes.get_pts()))
-                .filter_map(|x| x)
-                .take(1)
-                .forward(apts_tx)
-                .map(|_| ())
-                .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-        );
-        tx
-    }
-
-    fn make_sink(&mut self, pid: u16) -> Option<Sender<ts::TSPacket>> {
-        if self.vpid == pid {
-            return Some(self.make_video_sink());
-        }
-        if self.apid == pid {
-            return Some(self.make_audio_sink());
-        }
-        None
-    }
-}
-
 pub fn run() {
     env_logger::init();
 
-    let proc = find_pid(FramedRead::new(stdin(), ts::TSPacketDecoder::new()))
-        .map_err(|e| info!("err: {:?}", e))
-        .and_then(|(s, apid, vpid)| {
-            let (apts_tx, apts_rx) = channel(1);
-            let (vpts_tx, vpts_rx) = channel(1);
-            let mut sink_maker = JitterSinkMaker::new(apid, vpid, apts_tx, vpts_tx);
-            let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| -> Result<_, Error> {
-                Ok(sink_maker.make_sink(pid))
-            });
-            info!("apid, vpid {}, {}", apid, vpid);
-
-            let (stream, interrupter) = interruptible(s);
-            tokio::spawn(
-                stream
-                    .forward(demuxer.sink_map_err(|e| Error::from(e)))
-                    .map(|_| ())
-                    .map_err(|e| info!("decode err {:?}", e)),
-            );
-
-            apts_rx
-                .zip(vpts_rx)
-                .take(1)
-                .for_each(move |(apts, vpts)| {
-                    let jitter = Jitter {
-                        jitter: f64::from((vpts - apts) as u32) / 90000f64,
-                    };
-                    info!("vpts {} apts {}", vpts, apts);
-                    println!("{}", serde_json::to_string(&jitter).unwrap());
-                    interrupter.interrupt();
-                    Ok(())
-                })
-                .map_err(|e| info!("{:?}", e))
-        });
+    let proc = lazy(|| {
+        let packets = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
+        let cueable_packets = cueable(packets);
+        common::find_main_meta(cueable_packets)
+            .and_then(|(meta, s)| {
+                let packets = s.cue_up();
+                let cueable_packets = cueable(packets);
+                common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
+                    move |(video_pts, s)| {
+                        let packets = s.cue_up();
+                        find_first_audio_pts(meta.audio_pid, packets).and_then(move |audio_pts| {
+                            let jitter = Jitter {
+                                jitter: f64::from((video_pts - audio_pts) as u32) / 90000f64,
+                            };
+                            info!("vpts {} apts {}", video_pts, audio_pts);
+                            println!("{}", serde_json::to_string(&jitter).unwrap());
+                            Ok(())
+                        })
+                    },
+                )
+            })
+            .map_err(|e| info!("error: {}", e))
+    });
 
     let mut rt = Builder::new().core_threads(2).build().unwrap();
     rt.spawn(proc);
