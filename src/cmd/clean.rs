@@ -1,178 +1,243 @@
 use env_logger;
 use log::info;
 
+use futures::future::lazy;
 use futures::Future;
 use tokio::codec::{BytesCodec, FramedRead, FramedWrite};
 use tokio::io::{stdin, stdout};
-use tokio::prelude::{AsyncWrite, Sink, Stream};
+use tokio::prelude::{Async, AsyncSink, AsyncWrite, Sink, Stream};
 use tokio::runtime::Builder;
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::channel;
 
 use bytes::{Bytes, BytesMut};
 
-use std::collections::HashSet;
-use std::mem;
-use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
 
 use failure::{bail, Error};
 
 use crate::crc32;
 use crate::psi;
-use crate::stream::{cueable, interruptible, Cued};
+use crate::stream::cueable;
 use crate::ts;
 
-struct FindKeepPidsMaker {
-    pmt_pids: Arc<Mutex<HashSet<u16>>>,
-    remaining_pids: Arc<AtomicU16>,
-    pids: Arc<Mutex<HashSet<u16>>>,
-    pids_tx: Sender<HashSet<u16>>,
+struct ForwardUntilResolved<T: Stream, U, F> {
+    stream: Option<T>,
+    sink: Option<U>,
+    future: F,
+    forward_item: Option<T::Item>,
+    forward_done: bool,
 }
 
-impl FindKeepPidsMaker {
-    fn new(tx: Sender<HashSet<u16>>) -> FindKeepPidsMaker {
-        FindKeepPidsMaker {
-            pmt_pids: Arc::new(Mutex::new(HashSet::new())),
-            remaining_pids: Arc::new(AtomicU16::new(0)),
-            pids: Arc::new(Mutex::new(HashSet::new())),
-            pids_tx: tx,
+impl<T: Stream, U, F> ForwardUntilResolved<T, U, F> {
+    fn new(stream: T, sink: U, future: F) -> Self {
+        Self {
+            stream: Some(stream),
+            sink: Some(sink),
+            future,
+            forward_item: None,
+            forward_done: false,
         }
     }
 
-    fn make_pat_sink(&self) -> Sender<ts::TSPacket> {
-        let (tx, rx) = channel(1);
-        let pmt_pids = self.pmt_pids.clone();
-        let pids = self.pids.clone();
-        let remaining_pids = self.remaining_pids.clone();
-        tokio::spawn(
-            psi::Buffer::new(rx)
-                .take_while(move |bytes| {
-                    let bytes = &bytes[..];
-                    let table_id = bytes[0];
-                    if table_id == psi::PROGRAM_ASSOCIATION_SECTION {
-                        match psi::ProgramAssociationSection::parse(bytes) {
-                            Ok(pas) => {
-                                for (program_number, pid) in pas.program_association {
-                                    let mut pids = pids.lock().unwrap();
-                                    if program_number == 0 {
-                                        pids.insert(pid);
-                                    } else {
-                                        let mut pmt_pids = pmt_pids.lock().unwrap();
-                                        pmt_pids.insert(dbg!(pid));
-                                        remaining_pids.fetch_add(1, Ordering::Release);
-                                    }
-                                }
-                                return Ok(dbg!(false));
-                            }
-                            Err(e) => {
-                                info!("err {}: {:#?}", line!(), e);
-                            }
-                        };
-                    }
-                    Ok(true)
-                })
-                .for_each(|_| Ok(()))
-                .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-        );
-        tx
+    fn stream_mut(&mut self) -> &mut T {
+        self.stream.as_mut().take().unwrap()
     }
 
-    fn make_pmt_sink(&self, pid: u16) -> Sender<ts::TSPacket> {
-        let (tx, rx) = channel(1);
-        let pids2 = self.pids.clone();
-        let pids_tx = self.pids_tx.clone();
-        let remaining_pids1 = self.remaining_pids.clone();
-        let remaining_pids2 = self.remaining_pids.clone();
-        let mut found = false;
-        tokio::spawn(
-            psi::Buffer::new(rx)
-                .map(move |bytes| {
-                    let bytes = &bytes[..];
-                    let table_id = bytes[0];
-                    let mut pids = Vec::new();
-                    if !found && table_id == psi::TS_PROGRAM_MAP_SECTION {
-                        match psi::TSProgramMapSection::parse(bytes) {
-                            Ok(pms) => {
-                                found = true;
-                                pids.push(pid);
-                                pids.push(pms.pcr_pid);
-                                for si in pms.stream_info.iter() {
-                                    if si.stream_type == psi::STREAM_TYPE_H264 {
-                                        remaining_pids1.fetch_sub(1, Ordering::AcqRel);
-                                        return Vec::new();
-                                    }
-                                    pids.push(si.elementary_pid);
-                                }
-                                remaining_pids1.fetch_sub(1, Ordering::AcqRel);
-                            }
-                            Err(e) => {
-                                info!("err {}: {:#?}", line!(), e);
-                            }
-                        }
-                    }
-                    pids
-                })
-                .for_each(move |pids| {
-                    let mut keep_pids = pids2.lock().unwrap();
-                    for pid in pids.into_iter() {
-                        keep_pids.insert(pid);
-                    }
-
-                    let pids = match dbg!(remaining_pids2.load(Ordering::Acquire)) {
-                        0 => {
-                            let pids = dbg!(mem::replace(&mut *keep_pids, HashSet::new()));
-                            pids
-                        }
-                        _ => HashSet::new(),
-                    };
-                    pids_tx
-                        .clone()
-                        .send(pids)
-                        .map(|_| ())
-                        .map_err(|e| Error::from(e))
-                })
-                .map_err(|e| info!("err {}: {:#?}", line!(), e)),
-        );
-        tx
+    fn sink_mut(&mut self) -> &mut U {
+        self.sink.as_mut().take().unwrap()
     }
+}
 
-    fn make_sink(&mut self, pid: u16) -> Result<Option<Sender<ts::TSPacket>>, Error> {
-        if pid == 0 {
-            return Ok(Some(self.make_pat_sink()));
-        }
-        {
-            let pmt_pids = self.pmt_pids.lock().unwrap();
-            if pmt_pids.contains(&pid) {
-                return Ok(Some(self.make_pmt_sink(pid)));
+impl<T, U, F> Future for ForwardUntilResolved<T, U, F>
+where
+    T: Stream,
+    U: Sink<SinkItem = T::Item>,
+    F: Future,
+    F::Error: From<T::Error>,
+    F::Error: From<U::SinkError>,
+{
+    type Item = (F::Item, T, U);
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        loop {
+            match self.future.poll()? {
+                Async::Ready(item) => {
+                    let stream = self.stream.take().unwrap();
+                    let sink = self.sink.take().unwrap();
+                    return Ok(Async::Ready((item, stream, sink)));
+                }
+                Async::NotReady => {
+                    if self.forward_done {
+                        return Ok(Async::NotReady);
+                    }
+                }
+            }
+
+            match self.forward_item.take() {
+                Some(item) => match self.sink_mut().start_send(item)? {
+                    AsyncSink::Ready => continue,
+                    AsyncSink::NotReady(item) => {
+                        self.forward_item = Some(item);
+                        return Ok(Async::NotReady);
+                    }
+                },
+                None => {}
+            }
+
+            match self.stream_mut().poll()? {
+                Async::Ready(Some(item)) => match self.sink_mut().start_send(item)? {
+                    AsyncSink::Ready => continue,
+                    AsyncSink::NotReady(item) => {
+                        self.forward_item = Some(item);
+                        return Ok(Async::NotReady);
+                    }
+                },
+                Async::Ready(None) => match self.sink_mut().close()? {
+                    Async::Ready(_) => {
+                        self.forward_done = true;
+                        continue;
+                    }
+                    Async::NotReady => {
+                        return Ok(Async::NotReady);
+                    }
+                },
+                Async::NotReady => match self.sink_mut().poll_complete()? {
+                    Async::Ready(_) => continue,
+                    Async::NotReady => return Ok(Async::NotReady),
+                },
             }
         }
-        Ok(None)
     }
+}
+
+fn find_pids_from_pat<S: Stream<Item = ts::TSPacket, Error = Error>>(
+    s: S,
+) -> impl Future<Item = (Option<u16>, HashSet<u16>, S), Error = Error> {
+    let pat_stream = s.filter(|packet| packet.pid == ts::PAT_PID);
+    psi::Buffer::new(pat_stream)
+        .filter_map(move |bytes| {
+            let bytes = &bytes[..];
+            let table_id = bytes[0];
+            if table_id == psi::PROGRAM_ASSOCIATION_SECTION {
+                let pas = match psi::ProgramAssociationSection::parse(bytes) {
+                    Ok(pas) => pas,
+                    Err(e) => {
+                        info!("pat parse error: {:?}", e);
+                        return None;
+                    }
+                };
+                let mut network_pid = None;
+                let mut pmt_pids = HashSet::new();
+                for (program_number, pid) in pas.program_association {
+                    if program_number == 0 {
+                        network_pid = Some(pid);
+                    } else {
+                        pmt_pids.insert(pid);
+                    }
+                }
+
+                return Some((network_pid, pmt_pids));
+            }
+            None
+        })
+        .into_future()
+        .map_err(|(e, _)| e)
+        .and_then(|(pids, s)| match pids {
+            Some((network_pid, pmt_pids)) => Ok((
+                network_pid,
+                pmt_pids,
+                s.into_inner().into_inner().into_inner(),
+            )),
+            None => bail!("no pids found"),
+        })
+}
+
+fn find_keep_pids_from_pmt<S: Stream<Item = ts::TSPacket, Error = Error>>(
+    pmt_pid: u16,
+    pmt_stream: S,
+) -> impl Future<Item = (HashSet<u16>, S), Error = Error> {
+    psi::Buffer::new(pmt_stream)
+        .filter_map(move |bytes| {
+            let bytes = &bytes[..];
+            let table_id = bytes[0];
+            if table_id == psi::TS_PROGRAM_MAP_SECTION {
+                let pms = match psi::TSProgramMapSection::parse(bytes) {
+                    Ok(pms) => pms,
+                    Err(e) => {
+                        info!("pmt parse error: {:?}", e);
+                        return None;
+                    }
+                };
+                let mut pids = HashSet::new();
+                pids.insert(pmt_pid);
+                pids.insert(pms.pcr_pid);
+                for si in pms.stream_info.iter() {
+                    if si.stream_type == psi::STREAM_TYPE_H264 {
+                        // if the video stream is h264, ignore this program.
+                        return Some(HashSet::new());
+                    }
+                    pids.insert(si.elementary_pid);
+                }
+                return Some(pids);
+            }
+            None
+        })
+        .into_future()
+        .map(|(pids, stream)| (pids, stream.into_inner().into_inner()))
+        .map_err(|(e, _)| e)
+        .and_then(|(pids, s)| match pids {
+            Some(pids) => Ok((pids, s)),
+            None => bail!("no pids found"),
+        })
+}
+
+fn find_keep_pids_from_pmts<S: Stream<Item = ts::TSPacket, Error = Error>>(
+    pmt_pids: HashSet<u16>,
+    s: S,
+) -> impl Future<Item = (HashSet<u16>, S), Error = Error> {
+    let (tx, rx) = channel(1);
+    let mut tx_map: HashMap<u16, _> = pmt_pids
+        .into_iter()
+        .map(move |pid| (pid, tx.clone()))
+        .collect();
+    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| -> Result<_, Error> {
+        match tx_map.remove_entry(&pid) {
+            Some((pid, pids_tx)) => {
+                let (tx, rx) = channel(1);
+                tokio::spawn(
+                    find_keep_pids_from_pmt(pid, rx.map_err(|e| Error::from(e)))
+                        .and_then(move |(pids, _)| pids_tx.send(pids).map_err(|e| Error::from(e)))
+                        .map(|_| ())
+                        .map_err(|e| info!("pids send error: {:?}", e)),
+                );
+                return Ok(Some(tx));
+            }
+            None => Ok(None),
+        }
+    });
+    let collect_pids = rx
+        .fold(HashSet::new(), |mut out, pids| {
+            for pid in pids {
+                out.insert(pid);
+            }
+            Ok(out)
+        })
+        .map_err(|e| Error::from(e));
+    ForwardUntilResolved::new(s, demuxer, collect_pids).map(|(pids, s, _)| (pids, s))
 }
 
 fn find_keep_pids<S: Stream<Item = ts::TSPacket, Error = Error>>(
     s: S,
-) -> impl Future<Item = (Cued<S>, HashSet<u16>), Error = Error> {
-    let (s, interuppter) = interruptible(cueable(s));
-    let (tx, rx) = channel(1);
-    let mut sink_maker = FindKeepPidsMaker::new(tx);
-    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| sink_maker.make_sink(pid));
-    let pids_future = rx
-        .filter(|pids| !pids.is_empty())
-        .into_future()
-        .map(move |(x, _)| {
-            interuppter.interrupt();
-            dbg!(x)
+) -> impl Future<Item = (HashSet<u16>, S), Error = Error> {
+    find_pids_from_pat(s).and_then(|(network_pid, pmt_pids, s)| {
+        find_keep_pids_from_pmts(pmt_pids, s).and_then(move |(mut pids, s)| {
+            if let Some(network_pid) = network_pid {
+                pids.insert(network_pid);
+            }
+            Ok((pids, s))
         })
-        .map_err(|(e, _)| info!("err: {:?}", e));
-    s.forward(demuxer)
-        .map(|(s, _)| s.into_inner().cue_up())
-        .map_err(|e| info!("err: {:?}", e))
-        .join(pids_future)
-        .then(|r| match r {
-            Ok((s, Some(pids))) => Ok((s, dbg!(pids))),
-            _ => bail!("avpid not found"),
-        })
+    })
 }
 
 fn dump_pat(packet: ts::TSPacket, pids: &HashSet<u16>) -> Bytes {
@@ -241,9 +306,16 @@ fn dump_packets<S: Stream<Item = ts::TSPacket, Error = Error>, W: AsyncWrite>(
 pub fn run() {
     env_logger::init();
 
-    let proc = find_keep_pids(FramedRead::new(stdin(), ts::TSPacketDecoder::new()))
-        .map_err(|e| info!("err: {:?}", e))
-        .and_then(|(s, pids)| dump_packets(s, pids, stdout()).map_err(|e| info!("{:?}", e)));
+    let proc = lazy(|| {
+        let packets = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
+        let cueable_packets = cueable(packets);
+        find_keep_pids(cueable_packets)
+            .and_then(|(pids, s)| {
+                let s = s.cue_up();
+                dump_packets(s, pids, stdout())
+            })
+            .map_err(|e| info!("err: {:?}", e))
+    });
 
     let mut rt = Builder::new().core_threads(2).build().unwrap();
     rt.spawn(proc);
