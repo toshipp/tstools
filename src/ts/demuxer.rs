@@ -18,14 +18,14 @@ impl<Fun, F, S> Demuxer<Fun, F, S> {
     }
 }
 
-impl<Func, IF, S, E1, E2> Sink for Demuxer<Func, IF::Future, S>
+impl<Func, IF, S> Sink for Demuxer<Func, IF::Future, S>
 where
     Func: FnMut(u16) -> IF,
-    IF: IntoFuture<Item = Option<S>, Error = E1>,
-    S: Sink<SinkItem = TSPacket, SinkError = E2>,
+    IF: IntoFuture<Item = Option<S>>,
+    S: Sink<SinkItem = TSPacket, SinkError = IF::Error>,
 {
     type SinkItem = TSPacket;
-    type SinkError = E1;
+    type SinkError = IF::Error;
 
     fn start_send(
         &mut self,

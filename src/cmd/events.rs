@@ -9,7 +9,7 @@ use tokio::codec::FramedRead;
 use tokio::io::stdin;
 use tokio::prelude::future::Future;
 use tokio::prelude::stream::iter_ok;
-use tokio::prelude::Stream;
+use tokio::prelude::{Sink, Stream};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{channel, Receiver};
 
@@ -169,7 +169,7 @@ fn into_event_stream<S: Stream<Item = ts::TSPacket, Error = Error> + Send + 'sta
     s: S,
 ) -> Receiver<Event> {
     let (event_tx, event_rx) = channel(1);
-    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| -> Result<_, Error> {
+    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| {
         if ts::EIT_PIDS.iter().any(|x| *x == pid) {
             let (tx, rx) = channel(1);
             tokio::spawn(
@@ -179,7 +179,7 @@ fn into_event_stream<S: Stream<Item = ts::TSPacket, Error = Error> + Send + 'sta
                     .map(|_| ())
                     .map_err(|e| info!("can not convert packets into stream: {:?}", e)),
             );
-            return Ok(Some(tx));
+            return Ok(Some(tx.sink_map_err(|e| Error::from(e))));
         }
         Ok(None)
     });

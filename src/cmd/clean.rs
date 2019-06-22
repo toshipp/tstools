@@ -201,20 +201,18 @@ fn find_keep_pids_from_pmts<S: Stream<Item = ts::TSPacket, Error = Error>>(
         .into_iter()
         .map(move |pid| (pid, tx.clone()))
         .collect();
-    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| -> Result<_, Error> {
-        match tx_map.remove_entry(&pid) {
-            Some((pid, pids_tx)) => {
-                let (tx, rx) = channel(1);
-                tokio::spawn(
-                    find_keep_pids_from_pmt(pid, rx.map_err(|e| Error::from(e)))
-                        .and_then(move |(pids, _)| pids_tx.send(pids).map_err(|e| Error::from(e)))
-                        .map(|_| ())
-                        .map_err(|e| info!("pids send error: {:?}", e)),
-                );
-                return Ok(Some(tx));
-            }
-            None => Ok(None),
+    let demuxer = ts::demuxer::Demuxer::new(move |pid: u16| match tx_map.remove_entry(&pid) {
+        Some((pid, pids_tx)) => {
+            let (tx, rx) = channel(1);
+            tokio::spawn(
+                find_keep_pids_from_pmt(pid, rx.map_err(|e| Error::from(e)))
+                    .and_then(move |(pids, _)| pids_tx.send(pids).map_err(|e| Error::from(e)))
+                    .map(|_| ())
+                    .map_err(|e| info!("pids send error: {:?}", e)),
+            );
+            return Ok(Some(tx.sink_map_err(|e| Error::from(e))));
         }
+        None => Ok(None),
     });
     let collect_pids = rx
         .fold(HashSet::new(), |mut out, pids| {
