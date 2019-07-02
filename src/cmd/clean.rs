@@ -1,10 +1,10 @@
 use env_logger;
 use log::info;
+use std::path::PathBuf;
 
 use futures::future::lazy;
 use futures::Future;
 use tokio::codec::{BytesCodec, FramedRead, FramedWrite};
-use tokio::io::{stdin, stdout};
 use tokio::prelude::{Async, AsyncSink, AsyncWrite, Sink, Stream};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::channel;
@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use failure::{bail, Error};
 
+use super::io::{path_to_async_read, path_to_async_write};
 use crate::crc32;
 use crate::psi;
 use crate::stream::cueable;
@@ -301,16 +302,20 @@ fn dump_packets<S: Stream<Item = ts::TSPacket, Error = Error>, W: AsyncWrite>(
     .map_err(|e| Error::from(e))
 }
 
-pub fn run() {
+pub fn run(input: Option<PathBuf>, output: Option<PathBuf>) {
     env_logger::init();
 
     let proc = lazy(|| {
-        let packets = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        let cueable_packets = cueable(packets);
-        find_keep_pids(cueable_packets)
-            .and_then(|(pids, s)| {
-                let s = s.cue_up();
-                dump_packets(s, pids, stdout())
+        path_to_async_read(input)
+            .and_then(|input| {
+                path_to_async_write(output).and_then(|output| {
+                    let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+                    let cueable_packets = cueable(packets);
+                    find_keep_pids(cueable_packets).and_then(|(pids, s)| {
+                        let s = s.cue_up();
+                        dump_packets(s, pids, output)
+                    })
+                })
             })
             .map_err(|e| info!("err: {:?}", e))
     });

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use failure::{bail, Error};
 
 use env_logger;
@@ -6,7 +8,6 @@ use log::{debug, info};
 use futures::future::lazy;
 
 use tokio::codec::FramedRead;
-use tokio::io::stdin;
 use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
@@ -15,6 +16,7 @@ use serde_derive::Serialize;
 use serde_json;
 
 use super::common;
+use super::io::path_to_async_read;
 use crate::arib;
 use crate::pes;
 use crate::stream::cueable;
@@ -111,22 +113,24 @@ fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
         .map(|_| ())
 }
 
-pub fn run() {
+pub fn run(input: Option<PathBuf>) {
     env_logger::init();
 
     let proc = lazy(|| {
-        let packets = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        let cueable_packets = cueable(packets);
-        common::find_main_meta(cueable_packets)
-            .and_then(|(meta, s)| {
-                let packets = s.cue_up();
+        path_to_async_read(input)
+            .and_then(|input| {
+                let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
                 let cueable_packets = cueable(packets);
-                common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
-                    move |(pts, s)| {
-                        let packets = s.cue_up();
-                        process_captions(meta.caption_pid, pts, packets)
-                    },
-                )
+                common::find_main_meta(cueable_packets).and_then(|(meta, s)| {
+                    let packets = s.cue_up();
+                    let cueable_packets = cueable(packets);
+                    common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
+                        move |(pts, s)| {
+                            let packets = s.cue_up();
+                            process_captions(meta.caption_pid, pts, packets)
+                        },
+                    )
+                })
             })
             .map_err(|e| info!("error: {}", e))
     });

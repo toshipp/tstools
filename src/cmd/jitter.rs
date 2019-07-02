@@ -1,5 +1,6 @@
 use env_logger;
 use log::info;
+use std::path::PathBuf;
 
 use failure::{bail, Error};
 use futures::future::lazy;
@@ -7,14 +8,13 @@ use futures::future::lazy;
 use serde_derive::Serialize;
 use serde_json;
 use tokio::codec::FramedRead;
-use tokio::io::stdin;
 use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
 
 use super::common;
+use super::io::path_to_async_read;
 use crate::pes;
-
 use crate::stream::cueable;
 use crate::ts;
 
@@ -47,29 +47,34 @@ struct Jitter {
     jitter: f64,
 }
 
-pub fn run() {
+pub fn run(input: Option<PathBuf>) {
     env_logger::init();
 
     let proc = lazy(|| {
-        let packets = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        let cueable_packets = cueable(packets);
-        common::find_main_meta(cueable_packets)
-            .and_then(|(meta, s)| {
-                let packets = s.cue_up();
+        path_to_async_read(input)
+            .and_then(|input| {
+                let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
                 let cueable_packets = cueable(packets);
-                common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
-                    move |(video_pts, s)| {
-                        let packets = s.cue_up();
-                        find_first_audio_pts(meta.audio_pid, packets).and_then(move |audio_pts| {
-                            let jitter = Jitter {
-                                jitter: f64::from((video_pts - audio_pts) as u32) / 90000f64,
-                            };
-                            info!("vpts {} apts {}", video_pts, audio_pts);
-                            println!("{}", serde_json::to_string(&jitter).unwrap());
-                            Ok(())
-                        })
-                    },
-                )
+                common::find_main_meta(cueable_packets).and_then(|(meta, s)| {
+                    let packets = s.cue_up();
+                    let cueable_packets = cueable(packets);
+                    common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
+                        move |(video_pts, s)| {
+                            let packets = s.cue_up();
+                            find_first_audio_pts(meta.audio_pid, packets).and_then(
+                                move |audio_pts| {
+                                    let jitter = Jitter {
+                                        jitter: f64::from((video_pts - audio_pts) as u32)
+                                            / 90000f64,
+                                    };
+                                    info!("vpts {} apts {}", video_pts, audio_pts);
+                                    println!("{}", serde_json::to_string(&jitter).unwrap());
+                                    Ok(())
+                                },
+                            )
+                        },
+                    )
+                })
             })
             .map_err(|e| info!("error: {}", e))
     });

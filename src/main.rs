@@ -1,5 +1,7 @@
 use structopt::StructOpt;
 
+use std::path::PathBuf;
+
 #[macro_use]
 mod util;
 mod arib;
@@ -14,29 +16,32 @@ mod ts;
 #[derive(StructOpt)]
 enum Opt {
     #[structopt(name = "events")]
-    Events,
+    Events { input: Option<PathBuf> },
     #[structopt(name = "caption")]
-    Caption,
+    Caption { input: Option<PathBuf> },
     #[structopt(name = "jitter")]
-    Jitter,
+    Jitter { input: Option<PathBuf> },
     #[structopt(name = "clean")]
-    Clean,
+    Clean {
+        input: Option<PathBuf>,
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() {
     let opt = Opt::from_args();
     match opt {
-        Opt::Events => {
-            cmd::events::run();
+        Opt::Events { input } => {
+            cmd::events::run(input);
         }
-        Opt::Caption => {
-            cmd::caption::run();
+        Opt::Caption { input } => {
+            cmd::caption::run(input);
         }
-        Opt::Jitter => {
-            cmd::jitter::run();
+        Opt::Jitter { input } => {
+            cmd::jitter::run(input);
         }
-        Opt::Clean => {
-            cmd::clean::run();
+        Opt::Clean { input, output } => {
+            cmd::clean::run(input, output);
         }
     }
 }

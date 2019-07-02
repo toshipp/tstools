@@ -2,11 +2,11 @@ use env_logger;
 use log::info;
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use futures::future::lazy;
 
 use tokio::codec::FramedRead;
-use tokio::io::stdin;
 use tokio::prelude::future::Future;
 use tokio::prelude::stream::iter_ok;
 use tokio::prelude::{Sink, Stream};
@@ -21,6 +21,7 @@ use serde_derive::Serialize;
 
 use failure::{bail, Error, Fail};
 
+use super::io::path_to_async_read;
 use crate::arib;
 use crate::psi;
 use crate::stream::cueable;
@@ -201,22 +202,25 @@ fn into_event_map<S: Stream<Item = Event, Error = E>, E: Fail>(
     })
 }
 
-pub fn run() {
+pub fn run(input: Option<PathBuf>) {
     env_logger::init();
 
     let proc = lazy(|| {
-        let packets = FramedRead::new(stdin(), ts::TSPacketDecoder::new());
-        let cueable_packets = cueable(packets);
-        find_service_id(cueable_packets)
-            .and_then(|(sid, s)| {
-                let packets = s.cue_up();
-                let events = into_event_stream(sid, packets);
-                into_event_map(events).map_err(|e| Error::from(e))
-            })
-            .map(|event_map| {
-                for e in event_map.values() {
-                    println!("{}", serde_json::to_string(e).unwrap());
-                }
+        path_to_async_read(input)
+            .and_then(|input| {
+                let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+                let cueable_packets = cueable(packets);
+                find_service_id(cueable_packets)
+                    .and_then(|(sid, s)| {
+                        let packets = s.cue_up();
+                        let events = into_event_stream(sid, packets);
+                        into_event_map(events).map_err(|e| Error::from(e))
+                    })
+                    .map(|event_map| {
+                        for e in event_map.values() {
+                            println!("{}", serde_json::to_string(e).unwrap());
+                        }
+                    })
             })
             .map_err(|e| info!("error: {:?}", e))
     });
