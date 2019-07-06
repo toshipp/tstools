@@ -2,16 +2,21 @@ TSTools
 -------
 tools collection for mpeg2-ts.
 
-Usage
+Subcommands
 -----
 
-```
-tstools split [-debug] [infile] [outfile]
-```
-Split ts stream from `infile`.
-This dumps modified PAT (removed 1seg PMT), PMT, NIT, and packes associating with leaved PMT.
+* caption
 
-```
-tstools delay [-debug] [infile]
-```
-Show difference between video and audio start timestamp in second.
+    dump caption as jsonline.
+
+* clean
+
+    clean h264 stream.
+
+* events
+
+    dump future program events as jsonline.
+
+* jitter
+
+    dump jitter between audio and video streams.
