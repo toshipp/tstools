@@ -1,6 +1,8 @@
-use structopt::StructOpt;
-
 use std::path::PathBuf;
+
+use env_logger;
+use failure::Error;
+use structopt::StructOpt;
 
 #[macro_use]
 mod util;
@@ -28,20 +30,14 @@ enum Opt {
     },
 }
 
-fn main() {
+fn main() -> Result<(), Error> {
+    env_logger::init();
+
     let opt = Opt::from_args();
     match opt {
-        Opt::Events { input } => {
-            cmd::events::run(input);
-        }
-        Opt::Caption { input } => {
-            cmd::caption::run(input);
-        }
-        Opt::Jitter { input } => {
-            cmd::jitter::run(input);
-        }
-        Opt::Clean { input, output } => {
-            cmd::clean::run(input, output);
-        }
+        Opt::Events { input } => cmd::events::run(input),
+        Opt::Caption { input } => cmd::caption::run(input),
+        Opt::Jitter { input } => cmd::jitter::run(input),
+        Opt::Clean { input, output } => cmd::clean::run(input, output),
     }
 }

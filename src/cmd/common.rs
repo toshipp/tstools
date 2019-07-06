@@ -1,7 +1,5 @@
-use log::info;
-
 use failure::{bail, Error};
-
+use log::info;
 use tokio::prelude::{Future, Stream};
 
 use crate::arib::caption::is_caption;

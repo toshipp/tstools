@@ -1,19 +1,14 @@
 use std::path::PathBuf;
 
 use failure::{bail, Error};
-
-use env_logger;
-use log::{debug, info};
-
 use futures::future::lazy;
-
+use log::{debug, info};
+use serde_derive::Serialize;
+use serde_json;
 use tokio::codec::FramedRead;
 use tokio::prelude::future::Future;
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
-
-use serde_derive::Serialize;
-use serde_json;
 
 use super::common;
 use super::io::path_to_async_read;
@@ -67,7 +62,7 @@ fn dump_caption<'a>(
                 time_ms: offset % pes::PTS_HZ * 1000 / pes::PTS_HZ,
                 caption: caption_string,
             };
-            println!("{}", serde_json::to_string(&caption).unwrap());
+            println!("{}", serde_json::to_string(&caption)?);
             debug!("raw {:?}", du.data_unit_data);
         }
     }
@@ -113,29 +108,24 @@ fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
         .map(|_| ())
 }
 
-pub fn run(input: Option<PathBuf>) {
-    env_logger::init();
-
+pub fn run(input: Option<PathBuf>) -> Result<(), Error> {
     let proc = lazy(|| {
-        path_to_async_read(input)
-            .and_then(|input| {
-                let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+        path_to_async_read(input).and_then(|input| {
+            let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+            let cueable_packets = cueable(packets);
+            common::find_main_meta(cueable_packets).and_then(|(meta, s)| {
+                let packets = s.cue_up();
                 let cueable_packets = cueable(packets);
-                common::find_main_meta(cueable_packets).and_then(|(meta, s)| {
-                    let packets = s.cue_up();
-                    let cueable_packets = cueable(packets);
-                    common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
-                        move |(pts, s)| {
-                            let packets = s.cue_up();
-                            process_captions(meta.caption_pid, pts, packets)
-                        },
-                    )
-                })
+                common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
+                    move |(pts, s)| {
+                        let packets = s.cue_up();
+                        process_captions(meta.caption_pid, pts, packets)
+                    },
+                )
             })
-            .map_err(|e| info!("error: {}", e))
+        })
     });
 
-    let mut rt = Builder::new().core_threads(1).build().unwrap();
-    rt.spawn(proc);
-    rt.shutdown_on_idle().wait().unwrap();
+    let rt = Builder::new().build()?;
+    rt.block_on_all(proc)
 }

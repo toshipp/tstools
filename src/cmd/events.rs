@@ -1,25 +1,19 @@
-use env_logger;
-use log::info;
-
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use chrono;
+use chrono::offset::FixedOffset;
+use chrono::DateTime;
+use failure::{bail, Error, Fail};
 use futures::future::lazy;
-
+use log::info;
+use serde_derive::Serialize;
 use tokio::codec::FramedRead;
 use tokio::prelude::future::Future;
 use tokio::prelude::stream::iter_ok;
 use tokio::prelude::{Sink, Stream};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{channel, Receiver};
-
-use chrono;
-use chrono::offset::FixedOffset;
-use chrono::DateTime;
-
-use serde_derive::Serialize;
-
-use failure::{bail, Error, Fail};
 
 use super::io::path_to_async_read;
 use crate::arib;
@@ -202,30 +196,26 @@ fn into_event_map<S: Stream<Item = Event, Error = E>, E: Fail>(
     })
 }
 
-pub fn run(input: Option<PathBuf>) {
-    env_logger::init();
-
+pub fn run(input: Option<PathBuf>) -> Result<(), Error> {
     let proc = lazy(|| {
-        path_to_async_read(input)
-            .and_then(|input| {
-                let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
-                let cueable_packets = cueable(packets);
-                find_service_id(cueable_packets)
-                    .and_then(|(sid, s)| {
-                        let packets = s.cue_up();
-                        let events = into_event_stream(sid, packets);
-                        into_event_map(events).map_err(|e| Error::from(e))
-                    })
-                    .map(|event_map| {
-                        for e in event_map.values() {
-                            println!("{}", serde_json::to_string(e).unwrap());
-                        }
-                    })
-            })
-            .map_err(|e| info!("error: {:?}", e))
+        path_to_async_read(input).and_then(|input| {
+            let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+            let cueable_packets = cueable(packets);
+            find_service_id(cueable_packets)
+                .and_then(|(sid, s)| {
+                    let packets = s.cue_up();
+                    let events = into_event_stream(sid, packets);
+                    into_event_map(events).map_err(|e| Error::from(e))
+                })
+                .and_then(|event_map| {
+                    for e in event_map.values() {
+                        println!("{}", serde_json::to_string(e)?);
+                    }
+                    Ok(())
+                })
+        })
     });
 
-    let mut rt = Builder::new().core_threads(1).build().unwrap();
-    rt.spawn(proc);
-    rt.shutdown_on_idle().wait().unwrap();
+    let rt = Builder::new().build()?;
+    rt.block_on_all(proc)
 }

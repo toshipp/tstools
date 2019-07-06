@@ -1,7 +1,8 @@
-use failure::Error;
 use std::io::Result;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+
+use failure::Error;
 use tokio::fs::OpenOptions;
 use tokio::io::{stdin, stdout};
 use tokio::prelude::future::ok;

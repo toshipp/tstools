@@ -1,19 +1,15 @@
-use env_logger;
-use log::info;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use bytes::{Bytes, BytesMut};
+use failure::{bail, Error};
 use futures::future::lazy;
 use futures::Future;
+use log::info;
 use tokio::codec::{BytesCodec, FramedRead, FramedWrite};
 use tokio::prelude::{Async, AsyncSink, AsyncWrite, Sink, Stream};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::channel;
-
-use bytes::{Bytes, BytesMut};
-
-use std::collections::{HashMap, HashSet};
-
-use failure::{bail, Error};
 
 use super::io::{path_to_async_read, path_to_async_write};
 use crate::crc32;
@@ -302,25 +298,20 @@ fn dump_packets<S: Stream<Item = ts::TSPacket, Error = Error>, W: AsyncWrite>(
     .map_err(|e| Error::from(e))
 }
 
-pub fn run(input: Option<PathBuf>, output: Option<PathBuf>) {
-    env_logger::init();
-
+pub fn run(input: Option<PathBuf>, output: Option<PathBuf>) -> Result<(), Error> {
     let proc = lazy(|| {
-        path_to_async_read(input)
-            .and_then(|input| {
-                path_to_async_write(output).and_then(|output| {
-                    let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
-                    let cueable_packets = cueable(packets);
-                    find_keep_pids(cueable_packets).and_then(|(pids, s)| {
-                        let s = s.cue_up();
-                        dump_packets(s, pids, output)
-                    })
+        path_to_async_read(input).and_then(|input| {
+            path_to_async_write(output).and_then(|output| {
+                let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+                let cueable_packets = cueable(packets);
+                find_keep_pids(cueable_packets).and_then(|(pids, s)| {
+                    let s = s.cue_up();
+                    dump_packets(s, pids, output)
                 })
             })
-            .map_err(|e| info!("err: {:?}", e))
+        })
     });
 
-    let mut rt = Builder::new().core_threads(2).build().unwrap();
-    rt.spawn(proc);
-    rt.shutdown_on_idle().wait().unwrap();
+    let rt = Builder::new().build()?;
+    rt.block_on_all(proc)
 }
