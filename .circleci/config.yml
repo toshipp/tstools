@@ -1,0 +1,14 @@
+version: 2
+jobs:
+  test:
+    docker:
+      - image: rust
+    steps:
+      - checkout
+      - run: cargo test --all
+
+workflows:
+  version: 2
+  ci:
+    jobs:
+      - test
