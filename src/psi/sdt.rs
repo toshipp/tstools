@@ -6,6 +6,7 @@ use crate::util;
 
 pub const SDT_PID: u16 = 0x0011;
 pub const SELF_STREAM_TABLE_ID: u8 = 0x42;
+#[allow(dead_code)]
 pub const OTHER_STREAM_TABLE_ID: u8 = 0x46;
 
 #[derive(Debug)]
