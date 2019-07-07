@@ -55,6 +55,13 @@ fn dump_caption<'a>(
     offset: u64,
 ) -> Result<(), Error> {
     for du in data_units {
+        match &du.data_unit_parameter {
+            arib::caption::DataUnitParameter::Text => {}
+            param => {
+                debug!("unsupported data unit {:?}", param);
+                continue;
+            }
+        }
         let caption_string = arib::string::decode_to_utf8(du.data_unit_data)?;
         if !caption_string.is_empty() {
             let caption = Caption {
