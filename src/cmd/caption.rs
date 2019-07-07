@@ -92,7 +92,15 @@ fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
                 }
             };
             let offset = match pes.get_pts() {
-                Some(now) => now - base_pts,
+                Some(now) => {
+                    // if the caption is designated to be display
+                    // before the first picture,
+                    // ignore it.
+                    if now < base_pts {
+                        return Ok(());
+                    }
+                    now - base_pts
+                }
                 _ => return Ok(()),
             };
             let dg = match get_caption(&pes) {
