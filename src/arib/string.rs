@@ -507,8 +507,7 @@ impl AribDecoder {
             0xa0 => {}
             0xff => {}
 
-            // non control
-            _ => unreachable!(),
+            x => debug!("unknown control: {}", x),
         }
         Ok(())
     }
