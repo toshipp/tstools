@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use failure::{bail, Error};
 use futures::future::lazy;
-use log::{debug, info};
+use log::{debug, info, trace};
 use serde_derive::Serialize;
 use serde_json;
 use tokio::codec::FramedRead;
@@ -102,7 +102,7 @@ fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
             if let Err(e) = dump_caption(data_units, offset) {
                 info!("dump caption error: {:?}", e);
             }
-            debug!("bytes: {:?}", bytes);
+            trace!("bytes: {:?}", bytes);
             Ok(())
         })
         .map(|_| ())
