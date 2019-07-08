@@ -3,7 +3,7 @@ use std::collections::hash_map::{Entry as HashEntry, HashMap};
 use tokio::prelude::{Async, AsyncSink, Future, IntoFuture, Sink};
 
 pub struct Demuxer<Fun, F, S> {
-    sinks: HashMap<u16, S>,
+    sinks: HashMap<u16, Option<S>>,
     sink_making_future: Option<(u16, F)>,
     sink_maker: Fun,
 }
@@ -34,7 +34,7 @@ where
         if let Some((pid, mut future)) = self.sink_making_future.take() {
             match future.poll() {
                 Ok(Async::Ready(Some(sink))) => {
-                    self.sinks.insert(pid, sink);
+                    self.sinks.insert(pid, Some(sink));
                 }
                 Ok(Async::Ready(None)) => {
                     return Ok(AsyncSink::Ready);
@@ -54,7 +54,7 @@ where
             HashEntry::Vacant(e) => {
                 let mut future = (self.sink_maker)(item.pid).into_future();
                 match future.poll() {
-                    Ok(Async::Ready(Some(sink))) => e.insert(sink),
+                    Ok(Async::Ready(Some(sink))) => e.insert(Some(sink)),
                     Ok(Async::Ready(None)) => {
                         return Ok(AsyncSink::Ready);
                     }
@@ -69,13 +69,17 @@ where
             }
         };
 
-        match sink.start_send(item) {
-            Ok(p) => Ok(p),
-            Err(_) => {
-                // When a sink returns an error, the sink becomes permanently unavailable.
-                // BTW, this demuxer is working, the error is ignored.
-                Ok(AsyncSink::Ready)
-            }
+        match sink {
+            Some(s) => match s.start_send(item) {
+                Ok(p) => Ok(p),
+                Err(_) => {
+                    // When a sink returns an error, the sink becomes permanently unavailable.
+                    // BTW, this demuxer is working, the error is ignored.
+                    *sink = None;
+                    Ok(AsyncSink::Ready)
+                }
+            },
+            None => Ok(AsyncSink::Ready),
         }
     }
 
