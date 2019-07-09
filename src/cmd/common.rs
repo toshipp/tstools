@@ -57,7 +57,7 @@ fn find_meta<S: Stream<Item = ts::TSPacket, Error = Error>>(
                             audio_pid,
                             video_pid,
                             caption_pid,
-                        })
+                        });
                     }
                     _ => {}
                 }
@@ -91,6 +91,7 @@ fn find_main_pmt_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
                 for (program_number, pid) in pas.program_association {
                     if program_number != 0 {
                         // not network pid
+                        info!("main pmt: pid={}, program_number={}", pid, program_number);
                         return Some(pid);
                     }
                 }

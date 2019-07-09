@@ -317,7 +317,7 @@ impl<'a> DataUnit<'a> {
 
 fn is_non_partial_reception_caption(component_tag: u8) -> bool {
     match component_tag {
-        0x30..=0x37 => true,
+        0x30..=0x3f => true,
         _ => false,
     }
 }
