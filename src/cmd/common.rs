@@ -1,5 +1,5 @@
 use failure::{bail, Error};
-use log::info;
+use log::{debug, info};
 use tokio::prelude::{Future, Stream};
 
 use crate::arib::caption::is_caption;
@@ -40,6 +40,7 @@ fn find_meta<S: Stream<Item = ts::TSPacket, Error = Error>>(
                 let mut video_pid = None;
                 let mut audio_pid = None;
                 let mut caption_pid = None;
+                debug!("stream info: {:#?}", pms.stream_info);
                 for si in pms.stream_info.iter() {
                     if caption_pid.is_none() && is_caption(&si) {
                         caption_pid = Some(si.elementary_pid);
@@ -91,7 +92,7 @@ fn find_main_pmt_pid<S: Stream<Item = ts::TSPacket, Error = Error>>(
                 for (program_number, pid) in pas.program_association {
                     if program_number != 0 {
                         // not network pid
-                        info!("main pmt: pid={}, program_number={}", pid, program_number);
+                        debug!("main pmt: pid={}, program_number={}", pid, program_number);
                         return Some(pid);
                     }
                 }

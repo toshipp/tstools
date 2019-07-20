@@ -70,8 +70,8 @@ fn dump_caption<'a>(
                 caption: caption_string,
             };
             println!("{}", serde_json::to_string(&caption)?);
-            debug!("raw {:?}", du.data_unit_data);
         }
+        debug!("raw {:?}", du.data_unit_data);
     }
     Ok(())
 }
