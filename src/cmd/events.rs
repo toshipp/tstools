@@ -20,6 +20,7 @@ use crate::arib;
 use crate::psi;
 use crate::stream::cueable;
 use crate::ts;
+use psi::descriptor::Genre;
 
 struct Duration(chrono::Duration);
 
@@ -51,6 +52,26 @@ impl Event {
             detail: BTreeMap::new(),
             category: String::new(),
         }
+    }
+}
+
+fn stringify_genre(genre: &Genre) -> &'static str {
+    match genre {
+        Genre::News => "news",
+        Genre::Sports => "sports",
+        Genre::Information => "information",
+        Genre::Drama => "drama",
+        Genre::Music => "music",
+        Genre::Variety => "variety",
+        Genre::Movies => "movies",
+        Genre::Animation => "animation",
+        Genre::Documentary => "documentary",
+        Genre::Theatre => "theatre",
+        Genre::Hobby => "hobby",
+        Genre::Welfare => "welfare",
+        Genre::Reserved => "reserved",
+        Genre::Extention => "extention",
+        Genre::Others => "others",
     }
 }
 
@@ -91,7 +112,7 @@ fn try_into_event(eit: psi::EventInformationSection) -> Result<Vec<Event>, Error
                 }
                 psi::Descriptor::ContentDescriptor(c) => {
                     if event.category.is_empty() && !c.items.is_empty() {
-                        event.category = format!("{:?}", c.items[0]);
+                        event.category = String::from(stringify_genre(&c.items[0]));
                     }
                 }
                 _ => {}

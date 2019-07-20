@@ -7,7 +7,7 @@ pub use self::pat::*;
 mod pmt;
 pub use self::pmt::*;
 
-mod descriptor;
+pub mod descriptor;
 pub use self::descriptor::Descriptor;
 
 mod eit;

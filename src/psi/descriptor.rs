@@ -133,6 +133,7 @@ pub struct ContentDescriptor {
     pub items: Vec<Genre>,
 }
 
+#[derive(Debug)]
 pub enum Genre {
     News,
     Sports,
@@ -140,44 +141,15 @@ pub enum Genre {
     Drama,
     Music,
     Variety,
-    Cinema,
-    Anime,
+    Movies,
+    Animation,
     Documentary,
-    Theater,
-    Hoby,
-    Weal,
-    Reserve,
-    Extended,
-    Other,
-}
-
-impl fmt::Display for Genre {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            Genre::News => "ニュース/報道",
-            Genre::Sports => "スポーツ",
-            Genre::Information => "情報/ワイドショー",
-            Genre::Drama => "ドラマ",
-            Genre::Music => "音楽",
-            Genre::Variety => "バラエティ",
-            Genre::Cinema => "映画",
-            Genre::Anime => "アニメ/特撮",
-            Genre::Documentary => "ドキュメンタリー/教養",
-            Genre::Theater => "劇場/公演",
-            Genre::Hoby => "趣味/教育",
-            Genre::Weal => "福祉",
-            Genre::Reserve => "予備",
-            Genre::Extended => "拡張",
-            Genre::Other => "その他",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-impl fmt::Debug for Genre {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        (self as &dyn fmt::Display).fmt(f)
-    }
+    Theatre,
+    Hobby,
+    Welfare,
+    Reserved,
+    Extention,
+    Others,
 }
 
 impl ContentDescriptor {
@@ -198,15 +170,15 @@ impl ContentDescriptor {
                 0x3 => Genre::Drama,
                 0x4 => Genre::Music,
                 0x5 => Genre::Variety,
-                0x6 => Genre::Cinema,
-                0x7 => Genre::Anime,
+                0x6 => Genre::Movies,
+                0x7 => Genre::Animation,
                 0x8 => Genre::Documentary,
-                0x9 => Genre::Theater,
-                0xa => Genre::Hoby,
-                0xb => Genre::Weal,
-                0xc | 0xd => Genre::Reserve,
-                0xe => Genre::Extended,
-                0xf => Genre::Other,
+                0x9 => Genre::Theatre,
+                0xa => Genre::Hobby,
+                0xb => Genre::Welfare,
+                0xc | 0xd => Genre::Reserved,
+                0xe => Genre::Extention,
+                0xf => Genre::Others,
                 _ => unreachable!(),
             };
             items.push(genre);

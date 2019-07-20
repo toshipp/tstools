@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "tstools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arib_symbols 0.1.0",
  "bytes 0.4.12 (registry+https://github.com/rust-lang/crates.io-index)",
