@@ -132,7 +132,10 @@ impl Charset {
                 );
             }
             Charset::DRCS(_n) => return Err(Error::Unimplemented.into()),
-            Charset::Macro => return Err(Error::Unimplemented.into()),
+            Charset::Macro => {
+                let n = next!();
+                debug!("macro {}", n);
+            }
         }
         Ok(())
     }
