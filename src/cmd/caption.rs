@@ -62,7 +62,8 @@ fn dump_caption<'a>(
                 continue;
             }
         }
-        let caption_string = arib::string::decode_to_utf8(du.data_unit_data)?;
+        let decoder = arib::string::AribDecoder::with_caption_initialization();
+        let caption_string = decoder.decode(du.data_unit_data.iter())?;
         if !caption_string.is_empty() {
             let caption = Caption {
                 time_sec: offset / pes::PTS_HZ,

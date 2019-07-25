@@ -1,26 +1,6 @@
 use failure::bail;
 use failure::Error;
 
-use log::info;
-
-use std::fmt;
-
-use crate::arib::string::decode_to_utf8;
-
-pub struct AribString<'a>(&'a [u8]);
-
-impl<'a> fmt::Debug for AribString<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match decode_to_utf8(self.0.iter()) {
-            Ok(s) => write!(f, "\"{}\"", s),
-            Err(e) => {
-                info!("decode error {:?} {:?}", e, self.0);
-                write!(f, "\"Err(xxx)\"")
-            }
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum Descriptor<'a> {
     ShortEventDescriptor(ShortEventDescriptor<'a>),
@@ -33,8 +13,8 @@ pub enum Descriptor<'a> {
 #[derive(Debug)]
 pub struct ShortEventDescriptor<'a> {
     pub iso_639_language_code: String,
-    pub event_name: AribString<'a>,
-    pub text: AribString<'a>,
+    pub event_name: &'a [u8],
+    pub text: &'a [u8],
 }
 
 impl<'a> ShortEventDescriptor<'a> {
@@ -45,12 +25,12 @@ impl<'a> ShortEventDescriptor<'a> {
         }
         let iso_639_language_code = String::from_utf8(bytes[2..5].to_vec())?;
         let event_name_length = usize::from(bytes[5]);
-        let event_name = AribString(&bytes[6..6 + event_name_length]);
+        let event_name = &bytes[6..6 + event_name_length];
         let text;
         {
             let bytes = &bytes[6 + event_name_length..];
             let text_length = usize::from(bytes[0]);
-            text = AribString(&bytes[1..1 + text_length]);
+            text = &bytes[1..1 + text_length];
         }
         Ok(ShortEventDescriptor {
             iso_639_language_code,

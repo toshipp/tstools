@@ -3,13 +3,6 @@ use failure_derive::Fail;
 use log::debug;
 use std::char;
 
-pub fn decode_to_utf8<'a, I>(iter: I) -> Result<String, failure::Error>
-where
-    I: IntoIterator<Item = &'a u8>,
-{
-    AribDecoder::new().decode(iter.into_iter())
-}
-
 #[derive(Debug, Copy, Clone)]
 enum Charset {
     Kanji,
@@ -188,7 +181,7 @@ impl Invocation {
     }
 }
 
-struct AribDecoder {
+pub struct AribDecoder {
     gl: Invocation,
     gr: Invocation,
     g: [Charset; 4],
@@ -251,12 +244,12 @@ const CSI: u8 = 0x9b;
 const TIME: u8 = 0x9d;
 
 impl AribDecoder {
-    fn new() -> AribDecoder {
+    pub fn with_event_initialization() -> AribDecoder {
         AribDecoder {
-            gl: Invocation::Lock(Charset::Kanji),
+            gl: Invocation::Lock(Charset::JISGokanKanji1),
             gr: Invocation::Lock(Charset::Hiragana),
             g: [
-                Charset::Kanji,
+                Charset::JISGokanKanji1,
                 Charset::Alnum,
                 Charset::Hiragana,
                 Charset::Katakana,
@@ -264,7 +257,23 @@ impl AribDecoder {
         }
     }
 
-    fn decode<'a, I: Iterator<Item = &'a u8>>(mut self, iter: I) -> Result<String, failure::Error> {
+    pub fn with_caption_initialization() -> AribDecoder {
+        AribDecoder {
+            gl: Invocation::Lock(Charset::Kanji),
+            gr: Invocation::Lock(Charset::Hiragana),
+            g: [
+                Charset::Kanji,
+                Charset::Alnum,
+                Charset::Hiragana,
+                Charset::Macro,
+            ],
+        }
+    }
+
+    pub fn decode<'a, I: Iterator<Item = &'a u8>>(
+        mut self,
+        iter: I,
+    ) -> Result<String, failure::Error> {
         let mut iter = iter.cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {

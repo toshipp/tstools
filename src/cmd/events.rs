@@ -75,6 +75,11 @@ fn stringify_genre(genre: &Genre) -> &'static str {
     }
 }
 
+fn decode_to_utf8<'a, I: Iterator<Item = &'a u8>>(i: I) -> Result<String, Error> {
+    let decoder = arib::string::AribDecoder::with_event_initialization();
+    decoder.decode(i)
+}
+
 fn try_into_event(eit: psi::EventInformationSection) -> Result<Vec<Event>, Error> {
     let mut events = Vec::new();
     for eit_event in eit.events {
@@ -93,9 +98,8 @@ fn try_into_event(eit: psi::EventInformationSection) -> Result<Vec<Event>, Error
                 psi::Descriptor::ExtendedEventDescriptor(e) => {
                     for item in e.items.iter() {
                         if !item.item_description.is_empty() {
-                            let d =
-                                arib::string::decode_to_utf8(item_descs.iter().cloned().flatten())?;
-                            let i = arib::string::decode_to_utf8(items.iter().cloned().flatten())?;
+                            let d = decode_to_utf8(item_descs.iter().cloned().flatten())?;
+                            let i = decode_to_utf8(items.iter().cloned().flatten())?;
                             if !d.is_empty() && !i.is_empty() {
                                 event.detail.insert(d, i);
                             }
@@ -107,8 +111,8 @@ fn try_into_event(eit: psi::EventInformationSection) -> Result<Vec<Event>, Error
                     }
                 }
                 psi::Descriptor::ShortEventDescriptor(e) => {
-                    event.title = format!("{:?}", e.event_name);
-                    event.summary = format!("{:?}", e.text);
+                    event.title = decode_to_utf8(e.event_name.iter())?;
+                    event.summary = decode_to_utf8(e.text.iter())?;
                 }
                 psi::Descriptor::ContentDescriptor(c) => {
                     if event.category.is_empty() && !c.items.is_empty() {
@@ -118,8 +122,8 @@ fn try_into_event(eit: psi::EventInformationSection) -> Result<Vec<Event>, Error
                 _ => {}
             }
         }
-        let d = arib::string::decode_to_utf8(item_descs.iter().cloned().flatten())?;
-        let i = arib::string::decode_to_utf8(items.iter().cloned().flatten())?;
+        let d = decode_to_utf8(item_descs.iter().cloned().flatten())?;
+        let i = decode_to_utf8(items.iter().cloned().flatten())?;
         if !d.is_empty() && !i.is_empty() {
             event.detail.insert(d, i);
         }
