@@ -44,7 +44,7 @@ pub struct EventInformationSection<'a> {
     pub events: Vec<Event<'a>>,
     pub crc_32: u32,
 
-    _raw_bytes: &'a [u8],
+    pub raw_bytes: &'a [u8],
     pub schedule_type: ScheduleType,
 }
 
@@ -178,7 +178,7 @@ impl<'a> EventInformationSection<'a> {
             last_table_id,
             events,
             crc_32,
-            _raw_bytes: bytes,
+            raw_bytes: bytes,
             schedule_type: Self::schedule_type(table_id),
         })
     }

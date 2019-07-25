@@ -148,7 +148,10 @@ fn find_service_id<S: Stream<Item = ts::TSPacket, Error = Error>>(
         .map(|(sid, stream)| (sid, stream.into_inner().into_inner().into_inner()))
         .map_err(|(e, _)| e)
         .and_then(|(sid, s)| match sid {
-            Some(sid) => Ok((sid, s)),
+            Some(sid) => {
+                info!("sid: {}", sid);
+                Ok((sid, s))
+            }
             None => bail!("no sid found"),
         })
 }
