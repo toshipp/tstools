@@ -11,10 +11,8 @@ const INITIAL_BUFFER: usize = 4096;
 #[derive(Debug)]
 enum State {
     Initial,
-    Skipping(u8),
-    FindingLength,
-    Buffering(u16),
-    Proceeded,
+    Partial,
+    Full,
 }
 
 #[derive(Debug)]
@@ -40,6 +38,41 @@ impl<S> Buffer<S> {
     }
 }
 
+impl<S, E> Buffer<S>
+where
+    S: Stream<Item = ts::TSPacket, Error = E>,
+    E: Debug,
+{
+    fn feed_packet(&mut self, packet: ts::TSPacket) -> Result<(), failure::Error> {
+        let bytes = match packet.data {
+            Some(ref data) => data.as_ref(),
+            None => bail!("malformed psi packet, no data"),
+        };
+        if packet.payload_unit_start_indicator {
+            let pointer_field = usize::from(bytes[0]);
+            if bytes.len() < pointer_field + 1 {
+                bail!("malformed psi packet, no section header in the packet");
+            }
+            self.buf.clear();
+            self.buf.extend_from_slice(&bytes[pointer_field + 1..]);
+            self.counter = packet.continuity_counter;
+            self.state = State::Partial;
+        } else {
+            if self.counter == packet.continuity_counter {
+                // duplicate packet, do nothing.
+                return Ok(());
+            } else if (self.counter + 1) % 16 == packet.continuity_counter {
+                self.counter = packet.continuity_counter;
+            } else {
+                self.state = State::Initial;
+                bail!("psi packet discontinued");
+            }
+            self.buf.extend_from_slice(bytes);
+        }
+        Ok(())
+    }
+}
+
 impl<S, E> Stream for Buffer<S>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
@@ -49,78 +82,52 @@ where
     type Error = failure::Error;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+        macro_rules! next_valid_packet {
+            () => {{
+                loop {
+                    let packet = match self.inner.poll() {
+                        Ok(Async::Ready(Some(packet))) => packet,
+                        Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
+                        Ok(Async::NotReady) => return Ok(Async::NotReady),
+                        Err(e) => bail!("some error {:?}", e),
+                    };
+                    if !packet.transport_error_indicator {
+                        break packet;
+                    }
+                }
+            }};
+        }
+
         loop {
-            let packet = match self.inner.poll() {
-                Ok(Async::Ready(Some(packet))) => packet,
-                Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err(e) => bail!("some error {:?}", e),
-            };
-
-            if packet.transport_error_indicator {
-                continue;
-            }
-            let mut bytes = match packet.data {
-                Some(ref data) => data.as_ref(),
-                None => bail!("malformed psi packet, no data"),
-            };
-
-            if packet.payload_unit_start_indicator {
-                let pointer_field = bytes[0];
-                self.state = State::Skipping(pointer_field + 1);
-                self.counter = packet.continuity_counter;
-                self.buf.clear();
-            } else {
-                match self.state {
-                    State::Initial => {
-                        // seen partial section
-                        continue;
-                    }
-                    State::Proceeded => {
-                        // already completed
-                        continue;
-                    }
-                    _ => {
-                        if self.counter == packet.continuity_counter {
-                            // duplicate packet
-                            continue;
-                        } else if (self.counter + 1) % 16 == packet.continuity_counter {
-                            self.counter = packet.continuity_counter;
-                        } else {
-                            self.state = State::Initial;
-                            bail!("psi packet discontinued");
-                        }
+            match self.state {
+                State::Initial => {
+                    let packet = next_valid_packet!();
+                    if packet.payload_unit_start_indicator {
+                        self.feed_packet(packet)?;
                     }
                 }
-            }
-
-            if let State::Skipping(n) = self.state {
-                if bytes.len() < (n as usize) {
-                    self.state = State::Skipping(n - (bytes.len() as u8));
-                    continue;
-                } else {
-                    self.state = State::FindingLength;
-                    bytes = &bytes[n as usize..];
-                }
-            }
-
-            self.buf.extend_from_slice(bytes);
-
-            if let State::FindingLength = self.state {
-                if self.buf.len() < 3 {
-                    continue;
-                } else {
+                State::Partial => {
+                    if self.buf.len() < 3 {
+                        // not sufficient data for psi header.
+                        let packet = next_valid_packet!();
+                        self.feed_packet(packet)?;
+                        continue;
+                    }
                     let section_length =
-                        (u16::from(self.buf[1] & 0xf) << 8) | u16::from(self.buf[2]);
-                    self.state = State::Buffering(section_length + 3);
+                        (usize::from(self.buf[1] & 0xf) << 8) | usize::from(self.buf[2]);
+                    if self.buf.len() < section_length + 3 {
+                        let packet = next_valid_packet!();
+                        self.feed_packet(packet)?;
+                        continue;
+                    }
+                    self.state = State::Full;
                 }
-            }
-            if let State::Buffering(length) = self.state {
-                if self.buf.len() >= (length as usize) {
-                    self.state = State::Proceeded;
-                    return Ok(Async::Ready(Some(
-                        self.buf.split_to(length as usize).freeze(),
-                    )));
+                State::Full => {
+                    self.state = State::Partial;
+                    let section_length =
+                        (usize::from(self.buf[1] & 0xf) << 8) | usize::from(self.buf[2]);
+                    let buf = self.buf.split_to(section_length + 3).freeze();
+                    return Ok(Async::Ready(Some(buf)));
                 }
             }
         }
