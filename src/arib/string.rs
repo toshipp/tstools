@@ -1,9 +1,9 @@
 use failure;
 use failure_derive::Fail;
-use log::debug;
+use log::trace;
 use std::char;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 enum Charset {
     Kanji,
     Alnum,
@@ -22,6 +22,24 @@ enum Charset {
     Symbol,
     DRCS(u8),
     Macro,
+}
+
+enum DesignatePos {
+    G0 = 0,
+    G1 = 1,
+    G2 = 2,
+    G3 = 3,
+}
+
+enum InvokePos {
+    GL,
+    GR,
+}
+
+trait State {
+    fn designate(&mut self, dst: DesignatePos, cs: Charset);
+    fn lock(&mut self, dst: InvokePos, src: DesignatePos);
+    fn single(&mut self, src: DesignatePos);
 }
 
 impl Charset {
@@ -52,6 +70,7 @@ impl Charset {
         &self,
         iter: &mut I,
         out: &mut String,
+        state: &mut State,
     ) -> Result<(), failure::Error> {
         macro_rules! next {
             () => {
@@ -64,19 +83,19 @@ impl Charset {
                 if code_point < 0x7500 {
                     let code_point = 0x10000 | u32::from(code_point);
                     let chars = jisx0213::code_point_to_chars(code_point)
-                        .ok_or(Error::UnknownCodepoint(code_point))?;
+                        .ok_or(Error::UnknownCodepoint(code_point, String::from("kanji")))?;
                     out.extend(chars);
                 } else {
-                    out.push(
-                        arib_symbols::code_point_to_char(code_point)
-                            .ok_or(Error::UnknownCodepoint(code_point as u32))?,
-                    );
+                    out.push(arib_symbols::code_point_to_char(code_point).ok_or(
+                        Error::UnknownCodepoint(code_point as u32, String::from("kanji")),
+                    )?);
                 }
             }
             Charset::JISGokanKanji1 => {
                 let code_point = 0x10000 | (u32::from(next!()) << 8) | u32::from(next!());
-                let chars = jisx0213::code_point_to_chars(code_point)
-                    .ok_or(Error::UnknownCodepoint(code_point))?;
+                let chars = jisx0213::code_point_to_chars(code_point).ok_or(
+                    Error::UnknownCodepoint(code_point, String::from("jis gokan 1")),
+                )?;
                 out.extend(chars);
             }
             Charset::Alnum | Charset::ProportionalAlnum => out.push(char::from(next!())),
@@ -111,7 +130,7 @@ impl Charset {
                 out.push(unsafe { char::from_u32_unchecked(c) });
             }
             Charset::MosaicA | Charset::MosaicB | Charset::MosaicC | Charset::MosaicD => {
-                return Err(Error::Unimplemented.into());
+                return Err(Error::UnimplementedCharset(String::from("mosaic")).into());
             }
             Charset::JISX0201 => {
                 let c = 0xff61 + u32::from(next!()) - 0x21;
@@ -119,22 +138,48 @@ impl Charset {
             }
             Charset::JISGokanKanji2 => {
                 let code_point = 0x20000 | (u32::from(next!()) << 8) | u32::from(next!());
-                out.extend(
-                    jisx0213::code_point_to_chars(code_point)
-                        .ok_or(Error::UnknownCodepoint(code_point))?,
-                );
+                out.extend(jisx0213::code_point_to_chars(code_point).ok_or(
+                    Error::UnknownCodepoint(code_point, String::from("jis gokan 2")),
+                )?);
             }
             Charset::Symbol => {
                 let cp = (u16::from(next!()) << 8) | u16::from(next!());
                 out.push(
                     arib_symbols::code_point_to_char(cp)
-                        .ok_or(Error::UnknownCodepoint(cp as u32))?,
+                        .ok_or(Error::UnknownCodepoint(cp as u32, String::from("symbol")))?,
                 );
             }
-            Charset::DRCS(_n) => return Err(Error::Unimplemented.into()),
+            Charset::DRCS(n) => {
+                let cp = if *n == 0 {
+                    (u32::from(next!()) << 8) | u32::from(next!())
+                } else {
+                    u32::from(next!())
+                };
+                trace!("DRCS({}): 0x{:x}", n, cp);
+            }
             Charset::Macro => {
                 let n = next!();
-                debug!("macro {}", n);
+                match n {
+                    0x60 => {
+                        state.designate(DesignatePos::G0, Charset::Kanji);
+                        state.designate(DesignatePos::G1, Charset::Alnum);
+                        state.designate(DesignatePos::G2, Charset::Hiragana);
+                        state.designate(DesignatePos::G3, Charset::Macro);
+                        state.lock(InvokePos::GL, DesignatePos::G0);
+                        state.lock(InvokePos::GR, DesignatePos::G2);
+                    }
+                    0x61 => {
+                        state.designate(DesignatePos::G0, Charset::Kanji);
+                        state.designate(DesignatePos::G1, Charset::Katakana);
+                        state.designate(DesignatePos::G2, Charset::Hiragana);
+                        state.designate(DesignatePos::G3, Charset::Macro);
+                        state.lock(InvokePos::GL, DesignatePos::G0);
+                        state.lock(InvokePos::GR, DesignatePos::G2);
+                    }
+                    _ => {
+                        return Err(Error::UnknownCodepoint(n as u32, String::from("macro")).into());
+                    }
+                }
             }
         }
         Ok(())
@@ -143,50 +188,20 @@ impl Charset {
 
 #[derive(Debug, Fail)]
 enum Error {
-    #[fail(display = "unknown code point: {:x}", 0)]
-    UnknownCodepoint(u32),
-    #[fail(display = "unimplemented")]
-    Unimplemented,
+    #[fail(display = "unknown code point: 0x{:x} in {:}", 0, 1)]
+    UnknownCodepoint(u32, String),
+    #[fail(display = "unimplemented charset: {:}", 0)]
+    UnimplementedCharset(String),
+    #[fail(display = "unimplemented control: 0x{:x}", 0)]
+    UnimplementedControl(u8),
     #[fail(display = "malformed short bytes")]
     MalformedShortBytes,
 }
 
-enum Invocation {
-    Lock(Charset),
-    Single(Charset, Charset),
-}
-
-impl Invocation {
-    fn decode<I: Iterator<Item = u8>>(
-        &mut self,
-        iter: &mut I,
-        out: &mut String,
-    ) -> Result<(), failure::Error> {
-        match self {
-            Invocation::Lock(c) => c.decode(iter, out),
-            &mut Invocation::Single(now, prev) => {
-                *self = Invocation::Lock(prev);
-                now.decode(iter, out)
-            }
-        }
-    }
-
-    fn lock(&mut self, c: Charset) {
-        *self = Invocation::Lock(c)
-    }
-
-    fn single(&mut self, c: Charset) {
-        if let Invocation::Lock(prev) = *self {
-            *self = Invocation::Single(c, prev);
-        } else {
-            unreachable!();
-        }
-    }
-}
-
 pub struct AribDecoder {
-    gl: Invocation,
-    gr: Invocation,
+    single: Option<usize>,
+    gl: usize,
+    gr: usize,
     g: [Charset; 4],
 }
 
@@ -246,11 +261,47 @@ const STL: u8 = 0x9a;
 const CSI: u8 = 0x9b;
 const TIME: u8 = 0x9d;
 
+struct StateModification {
+    single: Option<usize>,
+    gl: Option<usize>,
+    gr: Option<usize>,
+    g: [Option<Charset>; 4],
+}
+
+impl StateModification {
+    fn new() -> Self {
+        StateModification {
+            single: None,
+            gl: None,
+            gr: None,
+            g: [None, None, None, None],
+        }
+    }
+}
+
+impl State for StateModification {
+    fn designate(&mut self, dst: DesignatePos, cs: Charset) {
+        self.g[dst as usize] = Some(cs);
+    }
+
+    fn lock(&mut self, dst: InvokePos, src: DesignatePos) {
+        match dst {
+            InvokePos::GL => self.gl = Some(src as usize),
+            InvokePos::GR => self.gr = Some(src as usize),
+        }
+    }
+
+    fn single(&mut self, src: DesignatePos) {
+        self.single = Some(src as usize)
+    }
+}
+
 impl AribDecoder {
     pub fn with_event_initialization() -> AribDecoder {
         AribDecoder {
-            gl: Invocation::Lock(Charset::JISGokanKanji1),
-            gr: Invocation::Lock(Charset::Hiragana),
+            single: None,
+            gl: 0,
+            gr: 2,
             g: [
                 Charset::JISGokanKanji1,
                 Charset::Alnum,
@@ -262,8 +313,9 @@ impl AribDecoder {
 
     pub fn with_caption_initialization() -> AribDecoder {
         AribDecoder {
-            gl: Invocation::Lock(Charset::Kanji),
-            gr: Invocation::Lock(Charset::Hiragana),
+            single: None,
+            gl: 0,
+            gr: 2,
             g: [
                 Charset::Kanji,
                 Charset::Alnum,
@@ -283,12 +335,44 @@ impl AribDecoder {
             if self.is_control(b) {
                 self.control(&mut iter, &mut string)?
             } else {
-                let charset = if b < 0x80 { &mut self.gl } else { &mut self.gr };
+                let charset = if b < 0x80 {
+                    match self.single {
+                        Some(pos) => {
+                            self.single = None;
+                            &self.g[pos]
+                        }
+                        None => &self.g[self.gl],
+                    }
+                } else {
+                    &self.g[self.gr]
+                };
                 let mut iter = (&mut iter).map(move |x| x & 0x7f);
-                charset.decode(&mut iter, &mut string)?;
+                let mut modification = StateModification::new();
+                charset.decode(&mut iter, &mut string, &mut modification)?;
+                self.apply(modification);
             }
         }
         Ok(string)
+    }
+
+    fn apply(&mut self, mut modification: StateModification) {
+        if modification.single.is_some() {
+            self.single = modification.single;
+        }
+        match modification.gl {
+            Some(gl) => self.gl = gl,
+            None => {}
+        }
+        match modification.gr {
+            Some(gr) => self.gr = gr,
+            None => {}
+        }
+        for i in 0..4 {
+            match modification.g[i].take() {
+                Some(cs) => self.g[i] = cs,
+                None => {}
+            }
+        }
     }
 
     fn is_control(&self, b: u8) -> bool {
@@ -320,16 +404,16 @@ impl AribDecoder {
         let s0 = next!();
         match s0 {
             // invocation and designation
-            LS0 => self.gl.lock(self.g[0]),
-            LS1 => self.gl.lock(self.g[1]),
+            LS0 => self.gl = 0,
+            LS1 => self.gl = 1,
             ESC => {
                 let s1 = next!();
                 match s1 {
-                    LS2 => self.gl.lock(self.g[2]),
-                    LS3 => self.gl.lock(self.g[3]),
-                    LS1R => self.gr.lock(self.g[1]),
-                    LS2R => self.gr.lock(self.g[2]),
-                    LS3R => self.gr.lock(self.g[3]),
+                    LS2 => self.gl = 2,
+                    LS3 => self.gl = 3,
+                    LS1R => self.gr = 1,
+                    LS2R => self.gr = 2,
+                    LS3R => self.gr = 3,
                     0x28..=0x2b => {
                         let pos = usize::from(s1 - 0x28);
                         let s2 = next!();
@@ -340,7 +424,7 @@ impl AribDecoder {
                         } else {
                             Charset::from_termination(s2)
                         };
-                        debug!("{}: g[{}] = {:?}", line!(), pos, code);
+                        trace!("{}: g[{}] = {:?}", line!(), pos, code);
                         self.g[pos] = code;
                     }
                     0x24 => {
@@ -353,7 +437,7 @@ impl AribDecoder {
                                 }
                                 let s4 = next!();
                                 let code = Charset::from_termination(s4);
-                                debug!("{}: g[0] = {:?}", line!(), code);
+                                trace!("{}: g[0] = {:?}", line!(), code);
                                 self.g[0] = code;
                             }
                             0x29..=0x2b => {
@@ -366,12 +450,12 @@ impl AribDecoder {
                                 } else {
                                     Charset::from_termination(s3)
                                 };
-                                debug!("{}: g[{}] = {:?}", line!(), pos, code);
+                                trace!("{}: g[{}] = {:?}", line!(), pos, code);
                                 self.g[pos] = code;
                             }
                             _ => {
                                 let code = Charset::from_termination(s2);
-                                debug!("{}: g[0] = {:?}", line!(), code);
+                                trace!("{}: g[0] = {:?}", line!(), code);
                                 self.g[0] = code;
                             }
                         }
@@ -381,8 +465,8 @@ impl AribDecoder {
                     }
                 }
             }
-            SS2 => self.gl.single(self.g[2]),
-            SS3 => self.gl.single(self.g[3]),
+            SS2 => self.single = Some(2),
+            SS3 => self.single = Some(3),
 
             // C0
             NUL => {
@@ -396,7 +480,7 @@ impl AribDecoder {
                 out.push('\x08');
             }
             APF => {
-                debug!("APF");
+                trace!("APF");
                 // advance cursor
                 out.push('\t');
             }
@@ -406,14 +490,14 @@ impl AribDecoder {
             }
             APU => {
                 // up cursor
-                debug!("up cursor");
+                trace!("up cursor");
             }
             APR => {
                 out.push('\r');
             }
             PAPF => {
                 let x = next!();
-                debug!("PAPF {}", x);
+                trace!("PAPF {}", x);
                 for _ in 0..x {
                     out.push('\t');
                 }
@@ -421,57 +505,57 @@ impl AribDecoder {
             APS => {
                 let x = next!();
                 let y = next!();
-                debug!("APS {} {}", x, y);
+                trace!("APS {} {}", x, y);
                 // todo
                 out.push('\n');
             }
             CS => {
-                debug!("clear display");
+                trace!("clear display");
             }
             CAN => {
-                debug!("cancel");
+                trace!("cancel");
             }
             RS => {
-                debug!("begin data header");
+                trace!("begin data header");
             }
             US => {
-                debug!("begin data unit");
+                trace!("begin data unit");
             }
             SP => out.push(' '),
             DEL => {
-                debug!("del");
+                trace!("del");
             }
 
             // C1
             BKF | RDF | GRF | YLF | BLF | MGF | CNF | WHF => {
-                debug!("color: {}", s0);
+                trace!("color: {}", s0);
             }
             COL => {
                 let param = param1or2!();
-                debug!("COL {:?}", param);
+                trace!("COL {:?}", param);
             }
             POL => {
                 let param = next!();
-                debug!("POL {}", param);
+                trace!("POL {}", param);
             }
             SSZ | MSZ | NSZ => {
-                debug!("font size: {}", s0);
+                trace!("font size: {}", s0);
             }
             SZX => {
                 let param = next!();
-                debug!("font size param: {}", param);
+                trace!("font size param: {}", param);
             }
             FLC => {
                 let param = next!();
-                debug!("FLC {}", param);
+                trace!("FLC {}", param);
             }
             CDC => {
                 let param = param1or2!();
-                debug!("CDC {:?}", param);
+                trace!("CDC {:?}", param);
             }
             WMM => {
                 let param = next!();
-                debug!("WMM {:?}", param);
+                trace!("WMM {:?}", param);
             }
             TIME => {
                 let mut seq = Vec::new();
@@ -490,20 +574,20 @@ impl AribDecoder {
                     },
                     _ => unreachable!(),
                 }
-                debug!("TIME {:?}", seq);
+                trace!("TIME {:?}", seq);
             }
             MACRO => {
-                return Err(Error::Unimplemented.into());
+                return Err(Error::UnimplementedControl(s0).into());
             }
             RPC => {
-                return Err(Error::Unimplemented.into());
+                return Err(Error::UnimplementedControl(s0).into());
             }
             STL | SPL => {
-                return Err(Error::Unimplemented.into());
+                return Err(Error::UnimplementedControl(s0).into());
             }
             HLC => {
                 let param = next!();
-                debug!("HLC {}", param);
+                trace!("HLC {}", param);
             }
             CSI => {
                 let mut seq = Vec::new();
@@ -514,12 +598,12 @@ impl AribDecoder {
                         break;
                     }
                 }
-                debug!("CSI {:?}", seq);
+                trace!("CSI {:?}", seq);
             }
             0xa0 => {}
             0xff => {}
 
-            x => debug!("unknown control: {}", x),
+            x => trace!("unknown control: {}", x),
         }
         Ok(())
     }

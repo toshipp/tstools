@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use failure::{bail, Error};
 use futures::future::lazy;
-use log::{debug, info, trace};
+use log::{debug, info};
 use serde_derive::Serialize;
 use serde_json;
 use tokio::codec::FramedRead;
@@ -50,29 +50,88 @@ struct Caption {
     caption: String,
 }
 
+fn log_drcs(mut b: &[u8]) {
+    let number_of_code = b[0];
+    info!("noc = {}", number_of_code);
+    b = &b[1..];
+    'outer: for _ in 0..number_of_code {
+        let character_code = (u16::from(b[0]) << 8) | u16::from(b[1]);
+        info!("cc = {}", character_code);
+        let number_of_font = b[2];
+        info!("nof {}", number_of_font);
+        b = &b[3..];
+        for _ in 0..number_of_font {
+            let font_id = b[5] >> 4;
+            let mode = b[5] & 0xf;
+            info!("font_id = {} mode = {}", font_id, mode);
+            b = &b[1..];
+            if mode == 0 || mode == 1 {
+                let depth = b[0];
+                let width = b[1];
+                let height = b[2];
+                info!("d = {} w = {} h = {}", depth, width, height);
+                let depth = u16::from(depth) + 1;
+                let bits = 16 - depth.leading_zeros();
+                let mask = (1 << bits) - 1;
+                let mut pos = 0;
+                let mut pbits = 0;
+                b = &b[3..];
+                for _ in 0..height {
+                    let mut pic = String::new();
+                    for _ in 0..width {
+                        let v = (b[pos] >> (8 - bits - pbits)) & mask;
+                        if v > 0 {
+                            pic.push_str(&format!("{}", v));
+                        } else {
+                            pic.push(' ');
+                        }
+                        pbits += bits;
+                        if pbits >= 8 {
+                            pos += 1;
+                            pbits -= 8;
+                        }
+                    }
+                    info!("{:?}", pic);
+                }
+            } else {
+                info!("geo")
+            }
+            break 'outer;
+        }
+    }
+}
+
 fn dump_caption<'a>(
     data_units: &Vec<arib::caption::DataUnit<'a>>,
     offset: u64,
 ) -> Result<(), Error> {
     for du in data_units {
         match &du.data_unit_parameter {
-            arib::caption::DataUnitParameter::Text => {}
+            arib::caption::DataUnitParameter::Text => {
+                let decoder = arib::string::AribDecoder::with_caption_initialization();
+                let caption_string = match decoder.decode(du.data_unit_data.iter()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        debug!("raw: {:?}", du.data_unit_data);
+                        return Err(e);
+                    }
+                };
+                if !caption_string.is_empty() {
+                    let caption = Caption {
+                        time_sec: offset / pes::PTS_HZ,
+                        time_ms: offset % pes::PTS_HZ * 1000 / pes::PTS_HZ,
+                        caption: caption_string,
+                    };
+                    println!("{}", serde_json::to_string(&caption)?);
+                }
+            }
+            arib::caption::DataUnitParameter::DRCS1 => {
+                log_drcs(du.data_unit_data);
+            }
             param => {
                 debug!("unsupported data unit {:?}", param);
-                continue;
             }
         }
-        let decoder = arib::string::AribDecoder::with_caption_initialization();
-        let caption_string = decoder.decode(du.data_unit_data.iter())?;
-        if !caption_string.is_empty() {
-            let caption = Caption {
-                time_sec: offset / pes::PTS_HZ,
-                time_ms: offset % pes::PTS_HZ * 1000 / pes::PTS_HZ,
-                caption: caption_string,
-            };
-            println!("{}", serde_json::to_string(&caption)?);
-        }
-        debug!("raw {:?}", du.data_unit_data);
     }
     Ok(())
 }
@@ -115,10 +174,7 @@ fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
                 arib::caption::DataGroupData::CaptionManagementData(ref cmd) => &cmd.data_units,
                 arib::caption::DataGroupData::CaptionData(ref cd) => &cd.data_units,
             };
-            if let Err(e) = dump_caption(data_units, offset) {
-                info!("dump caption error: {:?}", e);
-            }
-            trace!("bytes: {:?}", bytes);
+            dump_caption(data_units, offset)?;
             Ok(())
         })
         .map(|_| ())
