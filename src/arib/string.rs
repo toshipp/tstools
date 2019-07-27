@@ -43,29 +43,6 @@ trait State {
 }
 
 impl Charset {
-    fn from_termination(f: u8) -> Charset {
-        match f {
-            0x42 => Charset::Kanji,
-            0x4a => Charset::Alnum,
-            0x30 => Charset::Hiragana,
-            0x31 => Charset::Katakana,
-            0x32 => Charset::MosaicA,
-            0x33 => Charset::MosaicB,
-            0x34 => Charset::MosaicC,
-            0x35 => Charset::MosaicD,
-            0x36 => Charset::ProportionalAlnum,
-            0x37 => Charset::ProportionalHiragana,
-            0x38 => Charset::ProportionalKatakana,
-            0x49 => Charset::JISX0201,
-            0x39 => Charset::JISGokanKanji1,
-            0x3a => Charset::JISGokanKanji2,
-            0x3b => Charset::Symbol,
-            0x40..=0x4f => Charset::DRCS(f - 0x40),
-            0x70 => Charset::Macro,
-            _ => unreachable!(),
-        }
-    }
-
     fn decode<I: Iterator<Item = u8>>(
         &self,
         iter: &mut I,
@@ -296,6 +273,40 @@ impl State for StateModification {
     }
 }
 
+fn is_control(b: u8) -> bool {
+    let lo = b & 0x7f;
+    lo <= 0x20 || lo == 0x7f
+}
+
+fn g_set_from_termination(f: u8) -> Charset {
+    match f {
+        0x42 => Charset::Kanji,
+        0x4a => Charset::Alnum,
+        0x30 => Charset::Hiragana,
+        0x31 => Charset::Katakana,
+        0x32 => Charset::MosaicA,
+        0x33 => Charset::MosaicB,
+        0x34 => Charset::MosaicC,
+        0x35 => Charset::MosaicD,
+        0x36 => Charset::ProportionalAlnum,
+        0x37 => Charset::ProportionalHiragana,
+        0x38 => Charset::ProportionalKatakana,
+        0x49 => Charset::JISX0201,
+        0x39 => Charset::JISGokanKanji1,
+        0x3a => Charset::JISGokanKanji2,
+        0x3b => Charset::Symbol,
+        _ => unreachable!(),
+    }
+}
+
+fn drcs_from_termination(f: u8) -> Charset {
+    match f {
+        0x40..=0x4f => Charset::DRCS(f - 0x40),
+        0x70 => Charset::Macro,
+        _ => unreachable!(),
+    }
+}
+
 impl AribDecoder {
     pub fn with_event_initialization() -> AribDecoder {
         AribDecoder {
@@ -332,7 +343,7 @@ impl AribDecoder {
         let mut iter = iter.cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
-            if self.is_control(b) {
+            if is_control(b) {
                 self.control(&mut iter, &mut string)?
             } else {
                 let charset = if b < 0x80 {
@@ -375,11 +386,6 @@ impl AribDecoder {
         }
     }
 
-    fn is_control(&self, b: u8) -> bool {
-        let lo = b & 0x7f;
-        lo <= 0x20 || lo == 0x7f
-    }
-
     fn control<I: Iterator<Item = u8>>(
         &mut self,
         s: &mut I,
@@ -420,9 +426,9 @@ impl AribDecoder {
                         let code = if s2 == 0x20 {
                             // DRCS
                             let s3 = next!();
-                            Charset::from_termination(s3)
+                            drcs_from_termination(s3)
                         } else {
-                            Charset::from_termination(s2)
+                            g_set_from_termination(s2)
                         };
                         trace!("{}: g[{}] = {:?}", line!(), pos, code);
                         self.g[pos] = code;
@@ -431,12 +437,13 @@ impl AribDecoder {
                         let s2 = next!();
                         match s2 {
                             0x28 => {
+                                // DRCS
                                 let s3 = next!();
                                 if s3 != 0x20 {
                                     unreachable!();
                                 }
                                 let s4 = next!();
-                                let code = Charset::from_termination(s4);
+                                let code = drcs_from_termination(s4);
                                 trace!("{}: g[0] = {:?}", line!(), code);
                                 self.g[0] = code;
                             }
@@ -446,15 +453,15 @@ impl AribDecoder {
                                 let code = if s3 == 0x20 {
                                     // DRCS
                                     let s4 = next!();
-                                    Charset::from_termination(s4)
+                                    drcs_from_termination(s4)
                                 } else {
-                                    Charset::from_termination(s3)
+                                    g_set_from_termination(s3)
                                 };
                                 trace!("{}: g[{}] = {:?}", line!(), pos, code);
                                 self.g[pos] = code;
                             }
                             _ => {
-                                let code = Charset::from_termination(s2);
+                                let code = g_set_from_termination(s2);
                                 trace!("{}: g[0] = {:?}", line!(), code);
                                 self.g[0] = code;
                             }
