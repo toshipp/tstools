@@ -172,10 +172,7 @@ fn packets_to_events<S: Stream<Item = ts::TSPacket, Error = E>, E: Fail>(
                 match psi::EventInformationSection::parse(bytes) {
                     Ok(eit) => {
                         if eit.service_id == sid {
-                            match try_into_event(eit) {
-                                Ok(events) => return Some(events),
-                                Err(e) => info!("can not convert events: {:?}", e),
-                            }
+                            return Some(try_into_event(eit));
                         }
                     }
                     Err(e) => info!("eit parse error: {:?}", e),
@@ -183,6 +180,7 @@ fn packets_to_events<S: Stream<Item = ts::TSPacket, Error = E>, E: Fail>(
             }
             None
         })
+        .and_then(|x| x)
         .map(iter_ok)
         .flatten()
 }
