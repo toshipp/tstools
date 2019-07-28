@@ -54,15 +54,15 @@ fn log_drcs(mut b: &[u8]) {
     let number_of_code = b[0];
     info!("noc = {}", number_of_code);
     b = &b[1..];
-    'outer: for _ in 0..number_of_code {
+    for _ in 0..number_of_code {
         let character_code = (u16::from(b[0]) << 8) | u16::from(b[1]);
         info!("cc = {}", character_code);
         let number_of_font = b[2];
         info!("nof {}", number_of_font);
         b = &b[3..];
         for _ in 0..number_of_font {
-            let font_id = b[5] >> 4;
-            let mode = b[5] & 0xf;
+            let font_id = b[0] >> 4;
+            let mode = b[0] & 0xf;
             info!("font_id = {} mode = {}", font_id, mode);
             b = &b[1..];
             if mode == 0 || mode == 1 {
@@ -93,10 +93,11 @@ fn log_drcs(mut b: &[u8]) {
                     }
                     info!("{:?}", pic);
                 }
+                b = &b[pos..];
             } else {
-                info!("geo")
+                info!("geo");
+                return;
             }
-            break 'outer;
         }
     }
 }
