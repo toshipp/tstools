@@ -1,7 +1,9 @@
+use std::char;
+use std::collections::HashMap;
+
 use failure;
 use failure_derive::Fail;
 use log::trace;
-use std::char;
 
 #[derive(Debug)]
 enum Charset {
@@ -47,6 +49,7 @@ impl Charset {
         &self,
         iter: &mut I,
         out: &mut String,
+        drcs_map: &HashMap<u16, String>,
         state: &mut State,
     ) -> Result<(), failure::Error> {
         macro_rules! next {
@@ -127,12 +130,19 @@ impl Charset {
                 );
             }
             Charset::DRCS(n) => {
-                let cp = if *n == 0 {
-                    (u32::from(next!()) << 8) | u32::from(next!())
+                let cc = if *n == 0 {
+                    (u16::from(next!()) << 8) | u16::from(next!())
                 } else {
-                    u32::from(next!())
+                    (u16::from(0x40 + *n) << 8) | u16::from(next!())
                 };
-                trace!("DRCS({}): 0x{:x}", n, cp);
+                match drcs_map.get(&cc) {
+                    Some(s) => out.push_str(s),
+                    None => {
+                        return Err(
+                            Error::UnknownCodepoint(cc as u32, format!("drcs({})", *n)).into()
+                        );
+                    }
+                }
             }
             Charset::Macro => {
                 let n = next!();
@@ -180,6 +190,7 @@ pub struct AribDecoder {
     gl: usize,
     gr: usize,
     g: [Charset; 4],
+    drcs_map: HashMap<u16, String>,
 }
 
 // escape sequence
@@ -319,6 +330,7 @@ impl AribDecoder {
                 Charset::Hiragana,
                 Charset::Katakana,
             ],
+            drcs_map: HashMap::new(),
         }
     }
 
@@ -333,7 +345,12 @@ impl AribDecoder {
                 Charset::Hiragana,
                 Charset::Macro,
             ],
+            drcs_map: HashMap::new(),
         }
+    }
+
+    pub fn set_drcs(&mut self, drcs_map: HashMap<u16, String>) {
+        self.drcs_map = drcs_map;
     }
 
     pub fn decode<'a, I: Iterator<Item = &'a u8>>(
@@ -359,7 +376,7 @@ impl AribDecoder {
                 };
                 let mut iter = (&mut iter).map(move |x| x & 0x7f);
                 let mut modification = StateModification::new();
-                charset.decode(&mut iter, &mut string, &mut modification)?;
+                charset.decode(&mut iter, &mut string, &self.drcs_map, &mut modification)?;
                 self.apply(modification);
             }
         }
@@ -477,7 +494,7 @@ impl AribDecoder {
 
             // C0
             NUL => {
-                out.push('\0');
+                // receiver can ignore this.
             }
             BEL => {
                 out.push('\x07');

@@ -157,6 +157,22 @@ pub struct CaptionData<'a> {
     pub data_units: Vec<DataUnit<'a>>,
 }
 
+pub struct DrcsDataStructure<'a> {
+    pub codes: Vec<Code<'a>>,
+}
+
+pub struct Code<'a> {
+    pub character_code: u16,
+    pub fonts: Vec<Font<'a>>,
+}
+pub struct Font<'a> {
+    pub font_id: u8,
+    pub depth: u8,
+    pub width: u8,
+    pub height: u8,
+    pub pattern_data: &'a [u8],
+}
+
 impl<'a> DataGroup<'a> {
     pub fn parse(bytes: &[u8]) -> Result<DataGroup, Error> {
         let data_group_id = bytes[0] >> 2;
@@ -312,6 +328,52 @@ impl<'a> DataUnit<'a> {
             },
             5 + data_unit_size,
         ))
+    }
+}
+
+impl<'a> DrcsDataStructure<'a> {
+    pub fn parse(bytes: &[u8]) -> Result<DrcsDataStructure, Error> {
+        let number_of_code = bytes[0];
+        let mut bytes = &bytes[1..];
+        let mut codes = Vec::new();
+        for _ in 0..number_of_code {
+            let character_code = (u16::from(bytes[0]) << 8) | u16::from(bytes[1]);
+            let number_of_font = bytes[2];
+            bytes = &bytes[3..];
+            let mut fonts = Vec::new();
+            for _ in 0..number_of_font {
+                let font_id = bytes[0] >> 4;
+                let mode = bytes[0] & 0xf;
+                if mode != 1 {
+                    // TR-B14 says mode must be 0001
+                    bail!("mode must be 1, but {}", mode);
+                }
+                let depth = bytes[1];
+                if depth != 2 {
+                    // TR-B14 says depth must be 2
+                    bail!("depth must be 2, but {}", depth);
+                }
+                let width = bytes[2];
+                let height = bytes[3];
+                bytes = &bytes[4..];
+                let len = usize::from(width) * usize::from(height) / 4;
+                let font = Font {
+                    font_id,
+                    depth,
+                    width,
+                    height,
+                    pattern_data: &bytes[..len],
+                };
+                fonts.push(font);
+                bytes = &bytes[len..];
+            }
+            let code = Code {
+                character_code,
+                fonts,
+            };
+            codes.push(code);
+        }
+        Ok(DrcsDataStructure { codes })
     }
 }
 

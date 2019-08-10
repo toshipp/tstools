@@ -20,6 +20,7 @@ bytes = "0.4"
 futures = "0.1"
 structopt = "0.2"
 arib_symbols = { path = "arib_symbols" }
+md-5 = "0.8.0"
 
 [workspace]
 members = [

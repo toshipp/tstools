@@ -1,12 +1,15 @@
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::path::PathBuf;
 
 use failure::{bail, Error};
 use futures::future::lazy;
 use log::{debug, info};
-use serde_derive::Serialize;
+use md5::{Digest, Md5};
+use serde_derive::{Deserialize, Serialize};
 use serde_json;
 use tokio::codec::FramedRead;
-use tokio::prelude::future::Future;
+use tokio::prelude::future::{err, ok, Future};
 use tokio::prelude::Stream;
 use tokio::runtime::Builder;
 
@@ -43,6 +46,139 @@ fn get_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'
     }
 }
 
+fn print_aa(cc: u16, hash: u128, font: &arib::caption::Font) {
+    info!("cc = {}, hash = {:x}", cc, hash);
+    for y in 0..font.height {
+        let mut aa = String::new();
+        for x in 0..font.width {
+            let pos = usize::from(x) + usize::from(y) * usize::from(font.width);
+            let data = font.pattern_data[pos / 4];
+            let shift = 6 - (pos % 4) * 2;
+            let v = (data >> shift) & 0x3;
+            if v > 0 {
+                aa.push_str(&format!("{}", v));
+            } else {
+                aa.push(' ');
+            }
+        }
+        info!("{:?}", aa);
+    }
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct U128(u128);
+
+struct U128Visitor;
+impl<'de> serde::de::Visitor<'de> for U128Visitor {
+    type Value = U128;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an md5 string")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        match u128::from_str_radix(v, 16) {
+            Ok(x) => Ok(U128(x)),
+            Err(e) => Err(E::custom(format!("{} can not be parsed as u128: {}", v, e))),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for U128 {
+    fn deserialize<D>(deserializer: D) -> Result<U128, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_string(U128Visitor)
+    }
+}
+
+#[derive(Deserialize)]
+struct DRCSMap {
+    drcs: HashMap<U128, String>,
+}
+
+struct DRCSProcessor {
+    unknown: HashSet<u128>,
+    drcs_map: HashMap<u128, String>,
+    code_map: HashMap<u16, String>,
+    handle_drcs: HandleDRCS,
+}
+
+impl DRCSProcessor {
+    fn new(handle_drcs: HandleDRCS) -> DRCSProcessor {
+        DRCSProcessor {
+            unknown: HashSet::new(),
+            drcs_map: HashMap::new(),
+            code_map: HashMap::new(),
+            handle_drcs: handle_drcs,
+        }
+    }
+
+    fn load_map(&mut self, path: PathBuf) -> Result<(), Error> {
+        let file = File::open(path)?;
+        let map: DRCSMap = serde_json::from_reader(file)?;
+        self.drcs_map = map.drcs.into_iter().map(|(k, v)| (k.0, v)).collect();
+        Ok(())
+    }
+
+    fn process(&mut self, data: &[u8]) -> Result<(), Error> {
+        let drcs = arib::caption::DrcsDataStructure::parse(data)?;
+        for code in drcs.codes {
+            let mut code_str = String::new();
+            let mut found_font = false;
+            for font in code.fonts {
+                let hash = u128::from_ne_bytes(Md5::digest(font.pattern_data).into());
+                match self.drcs_map.get(&hash) {
+                    Some(s) => {
+                        code_str.push_str(s);
+                        found_font = true
+                    }
+                    None => {
+                        if self.unknown.insert(hash) {
+                            print_aa(code.character_code, hash, &font);
+                        }
+                        if let HandleDRCS::FailFast = self.handle_drcs {
+                            bail!(
+                                "unknown replacement string for cc = {}, hash = {}",
+                                code.character_code,
+                                hash
+                            );
+                        }
+                    }
+                }
+            }
+            if found_font {
+                self.code_map.insert(code.character_code, code_str);
+            } else {
+                self.code_map
+                    .insert(code.character_code, String::from("\u{fffd}"));
+            }
+        }
+        Ok(())
+    }
+
+    fn code_map(&self) -> HashMap<u16, String> {
+        self.code_map.clone()
+    }
+
+    fn clear_code_map(&mut self) {
+        self.code_map.clear();
+    }
+
+    fn report_error(self) -> Result<(), Error> {
+        if let HandleDRCS::ErrorExit = self.handle_drcs {
+            if !self.unknown.is_empty() {
+                bail!("found {} unknown drcs font", self.unknown.len());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Serialize)]
 struct Caption {
     time_sec: u64,
@@ -50,66 +186,18 @@ struct Caption {
     caption: String,
 }
 
-fn log_drcs(mut b: &[u8]) {
-    let number_of_code = b[0];
-    info!("noc = {}", number_of_code);
-    b = &b[1..];
-    for _ in 0..number_of_code {
-        let character_code = (u16::from(b[0]) << 8) | u16::from(b[1]);
-        info!("cc = {}", character_code);
-        let number_of_font = b[2];
-        info!("nof {}", number_of_font);
-        b = &b[3..];
-        for _ in 0..number_of_font {
-            let font_id = b[0] >> 4;
-            let mode = b[0] & 0xf;
-            info!("font_id = {} mode = {}", font_id, mode);
-            b = &b[1..];
-            if mode == 0 || mode == 1 {
-                let depth = b[0];
-                let width = b[1];
-                let height = b[2];
-                info!("d = {} w = {} h = {}", depth, width, height);
-                let depth = u16::from(depth) + 1;
-                let bits = 16 - depth.leading_zeros();
-                let mask = (1 << bits) - 1;
-                let mut pos = 0;
-                let mut pbits = 0;
-                b = &b[3..];
-                for _ in 0..height {
-                    let mut pic = String::new();
-                    for _ in 0..width {
-                        let v = (b[pos] >> (8 - bits - pbits)) & mask;
-                        if v > 0 {
-                            pic.push_str(&format!("{}", v));
-                        } else {
-                            pic.push(' ');
-                        }
-                        pbits += bits;
-                        if pbits >= 8 {
-                            pos += 1;
-                            pbits -= 8;
-                        }
-                    }
-                    info!("{:?}", pic);
-                }
-                b = &b[pos..];
-            } else {
-                info!("geo");
-                return;
-            }
-        }
-    }
-}
-
 fn dump_caption<'a>(
     data_units: &Vec<arib::caption::DataUnit<'a>>,
     offset: u64,
+    drcs_processor: &mut DRCSProcessor,
 ) -> Result<(), Error> {
+    drcs_processor.clear_code_map();
+
     for du in data_units {
         match &du.data_unit_parameter {
             arib::caption::DataUnitParameter::Text => {
-                let decoder = arib::string::AribDecoder::with_caption_initialization();
+                let mut decoder = arib::string::AribDecoder::with_caption_initialization();
+                decoder.set_drcs(drcs_processor.code_map());
                 let caption_string = match decoder.decode(du.data_unit_data.iter()) {
                     Ok(s) => s,
                     Err(e) => {
@@ -126,9 +214,7 @@ fn dump_caption<'a>(
                     println!("{}", serde_json::to_string(&caption)?);
                 }
             }
-            arib::caption::DataUnitParameter::DRCS1 => {
-                log_drcs(du.data_unit_data);
-            }
+            arib::caption::DataUnitParameter::DRCS1 => drcs_processor.process(du.data_unit_data)?,
             param => {
                 debug!("unsupported data unit {:?}", param);
             }
@@ -140,16 +226,17 @@ fn dump_caption<'a>(
 fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
     pid: u16,
     base_pts: u64,
+    drcs_processor: DRCSProcessor,
     s: S,
 ) -> impl Future<Item = (), Error = Error> {
     let caption_stream = s.filter(move |packet| packet.pid == pid);
     pes::Buffer::new(caption_stream)
-        .for_each(move |bytes| {
+        .fold(drcs_processor, move |mut drcs_processor, bytes| {
             let pes = match pes::PESPacket::parse(&bytes[..]) {
                 Ok(pes) => pes,
                 Err(e) => {
                     info!("pes parse error: {:?}", e);
-                    return Ok(());
+                    return ok(drcs_processor);
                 }
             };
             let offset = match pes.get_pts() {
@@ -158,30 +245,63 @@ fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
                     // before the first picture,
                     // ignore it.
                     if now < base_pts {
-                        return Ok(());
+                        return ok(drcs_processor);
                     }
                     now - base_pts
                 }
-                _ => return Ok(()),
+                _ => return ok(drcs_processor),
             };
             let dg = match get_caption(&pes) {
                 Ok(dg) => dg,
                 Err(e) => {
                     info!("retrieving caption error: {:?}", e);
-                    return Ok(());
+                    return ok(drcs_processor);
                 }
             };
             let data_units = match dg.data_group_data {
                 arib::caption::DataGroupData::CaptionManagementData(ref cmd) => &cmd.data_units,
                 arib::caption::DataGroupData::CaptionData(ref cd) => &cd.data_units,
             };
-            dump_caption(data_units, offset)?;
-            Ok(())
+            if let Err(e) = dump_caption(data_units, offset, &mut drcs_processor) {
+                return err(e);
+            }
+            ok(drcs_processor)
         })
-        .map(|_| ())
+        .then(|result| match result {
+            Ok(drcs_processor) => drcs_processor.report_error(),
+            Err(e) => Err(e),
+        })
 }
 
-pub fn run(input: Option<PathBuf>) -> Result<(), Error> {
+pub enum HandleDRCS {
+    Ignore,
+    FailFast,
+    ErrorExit,
+}
+
+impl std::str::FromStr for HandleDRCS {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ignore" => Ok(HandleDRCS::Ignore),
+            "fail-fast" => Ok(HandleDRCS::FailFast),
+            "error-exit" => Ok(HandleDRCS::ErrorExit),
+            s => bail!("unknown option: {}", s),
+        }
+    }
+}
+
+pub fn run(
+    input: Option<PathBuf>,
+    drcs_map: Option<PathBuf>,
+    handle_drcs: HandleDRCS,
+) -> Result<(), Error> {
+    let mut drcs_processor = DRCSProcessor::new(handle_drcs);
+    if let Some(path) = drcs_map {
+        drcs_processor.load_map(path)?;
+    }
+
     let proc = lazy(|| {
         path_to_async_read(input).and_then(|input| {
             let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
@@ -192,7 +312,7 @@ pub fn run(input: Option<PathBuf>) -> Result<(), Error> {
                 common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
                     move |(pts, s)| {
                         let packets = s.cue_up();
-                        process_captions(meta.caption_pid, pts, packets)
+                        process_captions(meta.caption_pid, pts, drcs_processor, packets)
                     },
                 )
             })
