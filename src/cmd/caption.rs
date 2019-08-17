@@ -47,7 +47,7 @@ fn get_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'
 }
 
 fn print_aa(cc: u16, hash: u128, font: &arib::caption::Font) {
-    info!("cc = {}, hash = {:x}", cc, hash);
+    info!("cc = {}, hash = {:032x}", cc, hash);
     for y in 0..font.height {
         let mut aa = String::new();
         for x in 0..font.width {
