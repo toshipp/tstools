@@ -45,12 +45,12 @@ trait State {
 }
 
 impl Charset {
-    fn decode<I: Iterator<Item = u8>>(
+    fn decode<I: Iterator<Item = u8>, S: State>(
         &self,
         iter: &mut I,
         out: &mut String,
         drcs_map: &HashMap<u16, String>,
-        state: &mut State,
+        state: &mut S,
     ) -> Result<(), failure::Error> {
         macro_rules! next {
             () => {
