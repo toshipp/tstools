@@ -11304,12 +11304,12 @@ const MULTI_CHAR_TABLE: &[[char; 2]] = &[
 pub fn code_point_to_chars(cp: u32) -> Option<&'static [char]> {
     let row = cp >> 8;
     let row = match row {
-        0x121...0x17e => row - 289,
+        0x121..=0x17e => row - 289,
         0x221 => row - 451,
-        0x223...0x225 => row - 452,
+        0x223..=0x225 => row - 452,
         0x228 => row - 454,
-        0x22c...0x22f => row - 457,
-        0x26e...0x27e => row - 519,
+        0x22c..=0x22f => row - 457,
+        0x26e..=0x27e => row - 519,
         _ => return None,
     };
     let col = cp & 0xff;

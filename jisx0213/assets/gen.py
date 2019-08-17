@@ -73,7 +73,7 @@ pub fn code_point_to_chars(cp: u32) -> Option<&'static [char]> {
 """.format(bs=bs, offset=bs-offset)
         else:
             func_str += """\
-        0x{bs:x}...0x{be:x} => row - {offset},
+        0x{bs:x}..=0x{be:x} => row - {offset},
 """.format(bs=bs, be=be, offset=bs-offset)
         offset += be - bs + 1
 
