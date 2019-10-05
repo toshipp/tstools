@@ -5,6 +5,9 @@ jobs:
       - image: rust
     steps:
       - checkout
+      - run: |
+          cargo install cargo-audit
+          cargo audit -D
       - run: cargo test --all
 
 workflows:
