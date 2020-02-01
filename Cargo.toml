@@ -1,26 +1,26 @@
 [package]
 name = "tstools"
-version = "0.1.3"
+version = "0.1.4"
 authors = ["toshi_pp <toshiq2@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-failure = "0.1.5"
-failure_derive = "0.1.5"
-lazy_static = "1.1.0"
-log = "0.4"
-env_logger = "0.5.13"
+failure = "^0.1.5"
+failure_derive = "^0.1.5"
+lazy_static = "^1.1.0"
+log = "^0.4"
+env_logger = "^0.5.13"
 jisx0213 = { path = "jisx0213" }
-chrono = { version = "0.4", features = ["serde"] }
-serde_json = "1.0"
-serde_derive = "1.0"
-serde = "1.0"
-tokio = { version = "0.1", features = ["sync"] }
-bytes = "0.4"
-futures = "0.1"
-structopt = "0.2"
+chrono = { version = "^0.4", features = ["serde"] }
+serde_json = "^1.0"
+serde_derive = "^1.0"
+serde = "^1.0"
+tokio = { version = "^0.1", features = ["sync"] }
+bytes = "^0.4"
+futures = "^0.1"
+structopt = "^0.2"
 arib_symbols = { path = "arib_symbols" }
-md-5 = "0.8.0"
+md-5 = "^0.8.0"
 
 [workspace]
 members = [
