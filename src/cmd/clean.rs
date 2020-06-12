@@ -285,13 +285,13 @@ fn dump_packets<S: Stream<Item = ts::TSPacket, Error = Error>, W: AsyncWrite>(
     out: W,
 ) -> impl Future<Item = (), Error = Error> {
     s.filter_map(move |packet| {
-        (if packet.pid == ts::PAT_PID {
+        if packet.pid == ts::PAT_PID {
             Some(dump_pat(packet, &pids))
         } else if pids.contains(&packet.pid) {
             Some(packet.into_raw())
         } else {
             None
-        })
+        }
     })
     .forward(FramedWrite::new(out, BytesCodec::new()))
     .map(|_| ())
