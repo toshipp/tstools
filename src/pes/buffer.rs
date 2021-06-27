@@ -1,7 +1,9 @@
 use bytes::{Bytes, BytesMut};
 use failure;
 use failure::bail;
+use log::warn;
 use std::fmt::Debug;
+use std::mem;
 use tokio::prelude::{Async, Stream};
 
 use crate::ts;
@@ -46,7 +48,11 @@ impl<S> Buffer<S> {
             return Ok(self.buf.take().freeze());
         }
         if self.buf.len() < pes_packet_length + 6 {
-            bail!("not enough data");
+            bail!(
+                "not enough data. needs: {}, has: {}",
+                pes_packet_length + 6,
+                self.buf.len()
+            );
         }
         return Ok(self.buf.split_to(pes_packet_length + 6).freeze());
     }
@@ -69,8 +75,8 @@ where
             let packet = match self.inner.poll() {
                 Ok(Async::Ready(Some(packet))) => packet,
                 Ok(Async::Ready(None)) => {
-                    self.state = State::Closed;
-                    if let State::Buffering = self.state {
+                    let old_state = mem::replace(&mut self.state, State::Closed);
+                    if let State::Buffering = old_state {
                         return Ok(Async::Ready(Some(self.get_bytes()?)));
                     }
                     return Ok(Async::Ready(None));
@@ -101,7 +107,10 @@ where
 
                 return match bytes {
                     Some(Ok(bytes)) => Ok(Async::Ready(Some(bytes))),
-                    Some(Err(e)) => Err(e),
+                    Some(Err(e)) => {
+                        warn!("an error happened, ignore: {:?}", e);
+                        continue;
+                    }
                     None => continue,
                 };
             } else {

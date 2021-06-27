@@ -8,7 +8,7 @@ const SYNC_BYTE: u8 = 0x47;
 
 #[derive(Debug, Clone)]
 pub struct AdaptationField {
-    raw: Bytes,
+    pub raw: Bytes,
 }
 
 #[derive(Debug, Clone)]
@@ -18,6 +18,7 @@ pub struct TSPacket {
     pub transport_priority: bool,
     pub pid: u16,
     pub transport_scrambling_control: u8,
+    pub adaptation_field_control: u8,
     pub continuity_counter: u8,
     pub adaptation_field: Option<AdaptationField>,
     pub data: Option<Bytes>,
@@ -74,6 +75,7 @@ impl Decoder for TSPacketDecoder {
             transport_priority,
             pid,
             transport_scrambling_control,
+            adaptation_field_control,
             continuity_counter,
             adaptation_field,
             data,
