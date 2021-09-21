@@ -305,6 +305,7 @@ pub fn run(
     let proc = lazy(|| {
         path_to_async_read(input).and_then(|input| {
             let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+            let packets = common::strip_error_packets(packets);
             let cueable_packets = cueable(packets);
             common::find_main_meta(cueable_packets).and_then(|(meta, s)| {
                 let packets = s.cue_up();

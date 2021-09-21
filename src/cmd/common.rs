@@ -136,3 +136,10 @@ pub fn find_first_picture_pts<S: Stream<Item = ts::TSPacket, Error = Error>>(
             None => bail!("no pts found"),
         })
 }
+
+// FIXME: erroneous packets will be error, this function should be removed.
+pub fn strip_error_packets<S: Stream<Item = ts::TSPacket, Error = Error>>(
+    s: S,
+) -> impl Stream<Item = S::Item, Error = S::Error> {
+    s.filter(|x| !x.transport_error_indicator)
+}

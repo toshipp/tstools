@@ -11,6 +11,7 @@ use tokio::prelude::{Async, AsyncSink, AsyncWrite, Sink, Stream};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::channel;
 
+use super::common::strip_error_packets;
 use super::io::{path_to_async_read, path_to_async_write};
 use crate::crc32;
 use crate::psi;
@@ -303,6 +304,7 @@ pub fn run(input: Option<PathBuf>, output: Option<PathBuf>) -> Result<(), Error>
         path_to_async_read(input).and_then(|input| {
             path_to_async_write(output).and_then(|output| {
                 let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+                let packets = strip_error_packets(packets);
                 let cueable_packets = cueable(packets);
                 find_keep_pids(cueable_packets).and_then(|(pids, s)| {
                     let s = s.cue_up();

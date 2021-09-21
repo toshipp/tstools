@@ -58,6 +58,21 @@ impl Decoder for TSPacketDecoder {
         let transport_scrambling_control = src[3] >> 6;
         let adaptation_field_control = (src[3] & 0x30) >> 4;
         let continuity_counter = src[3] & 0xf;
+        // FIXME: return error.
+        if transport_error_indicator {
+            return Ok(Some(TSPacket {
+                transport_error_indicator,
+                payload_unit_start_indicator,
+                transport_priority,
+                pid,
+                transport_scrambling_control,
+                adaptation_field_control,
+                continuity_counter,
+                adaptation_field: None,
+                data: None,
+                raw: src,
+            }));
+        }
         let (adaptation_field, adaptation_field_length) = match adaptation_field_control {
             0b10 | 0b11 => {
                 let (af, n) = AdaptationField::decode(&mut src.clone().split_off(4))?;

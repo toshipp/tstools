@@ -15,6 +15,7 @@ use tokio::prelude::{Sink, Stream};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc::{channel, Receiver};
 
+use super::common::strip_error_packets;
 use super::io::path_to_async_read;
 use crate::arib;
 use crate::psi;
@@ -226,6 +227,7 @@ pub fn run(input: Option<PathBuf>) -> Result<(), Error> {
     let proc = lazy(|| {
         path_to_async_read(input).and_then(|input| {
             let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+            let packets = strip_error_packets(packets);
             let cueable_packets = cueable(packets);
             find_service_id(cueable_packets)
                 .and_then(|(sid, s)| {
