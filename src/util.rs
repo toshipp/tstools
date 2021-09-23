@@ -1,5 +1,5 @@
-use failure::bail;
-use failure::Error;
+use anyhow::bail;
+use anyhow::Error;
 
 macro_rules! check_len {
     ($b:expr, $l:expr) => {

@@ -1,6 +1,5 @@
+use anyhow::{bail, Error};
 use bytes::{Bytes, BytesMut};
-use failure::bail;
-use failure::Error;
 use tokio::codec::Decoder;
 
 pub const TS_PACKET_LENGTH: usize = 188;

@@ -1,6 +1,5 @@
+use anyhow::{bail, Error};
 use bytes::{Bytes, BytesMut};
-use failure;
-use failure::bail;
 use log::warn;
 use std::fmt::Debug;
 use std::mem;
@@ -39,7 +38,7 @@ impl<S> Buffer<S> {
         self.inner
     }
 
-    fn get_bytes(&mut self) -> Result<Bytes, failure::Error> {
+    fn get_bytes(&mut self) -> Result<Bytes, Error> {
         if self.buf.len() < 6 {
             bail!("not enough data");
         }
@@ -64,7 +63,7 @@ where
     E: Debug,
 {
     type Item = Bytes;
-    type Error = failure::Error;
+    type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
         loop {

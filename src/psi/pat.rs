@@ -1,5 +1,4 @@
-use failure::bail;
-use failure::Error;
+use anyhow::{bail, Error};
 
 use crate::crc32;
 use crate::util;

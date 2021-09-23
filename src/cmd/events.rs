@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use anyhow::{bail, Error};
 use chrono;
 use chrono::offset::FixedOffset;
 use chrono::DateTime;
-use failure::{bail, Error, Fail};
 use futures::future::lazy;
 use log::info;
 use serde_derive::Serialize;
@@ -161,7 +161,7 @@ fn find_service_id<S: Stream<Item = ts::TSPacket, Error = Error>>(
         })
 }
 
-fn packets_to_events<S: Stream<Item = ts::TSPacket, Error = E>, E: Fail>(
+fn packets_to_events<S: Stream<Item = ts::TSPacket, Error = E>, E: Into<Error>>(
     sid: u16,
     s: S,
 ) -> impl Stream<Item = Event, Error = Error> {
@@ -214,13 +214,14 @@ fn into_event_stream<S: Stream<Item = ts::TSPacket, Error = Error> + Send + 'sta
     event_rx
 }
 
-fn into_event_map<S: Stream<Item = Event, Error = E>, E: Fail>(
+fn into_event_map<S: Stream<Item = Event, Error = E>, E: Into<Error>>(
     s: S,
-) -> impl Future<Item = BTreeMap<u16, Event>, Error = E> {
+) -> impl Future<Item = BTreeMap<u16, Event>, Error = Error> {
     s.fold(BTreeMap::new(), |mut out, event| {
         out.insert(event.id, event);
         Ok(out)
     })
+    .map_err(|e| e.into())
 }
 
 pub fn run(input: Option<PathBuf>) -> Result<(), Error> {

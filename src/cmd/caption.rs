@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
 
-use failure::{bail, Error};
+use anyhow::{bail, Error};
 use futures::future::lazy;
 use log::{debug, info};
 use md5::{Digest, Md5};

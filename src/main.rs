@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use anyhow::Error;
 use env_logger;
-use failure::Error;
 use structopt::StructOpt;
 
 #[macro_use]

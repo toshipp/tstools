@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use anyhow::{bail, Error};
 use bytes::{Bytes, BytesMut};
-use failure::{bail, Error};
 use futures::future::lazy;
 use futures::Future;
 use log::info;

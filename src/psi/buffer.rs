@@ -1,6 +1,5 @@
+use anyhow::{bail, Error};
 use bytes::{Bytes, BytesMut};
-use failure;
-use failure::bail;
 use std::fmt::Debug;
 use tokio::prelude::{Async, Stream};
 
@@ -41,9 +40,9 @@ impl<S> Buffer<S> {
 impl<S, E> Buffer<S>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
-    E: Debug,
+    E: Into<Error>,
 {
-    fn feed_packet(&mut self, packet: ts::TSPacket) -> Result<(), failure::Error> {
+    fn feed_packet(&mut self, packet: ts::TSPacket) -> Result<(), Error> {
         let bytes = match packet.data {
             Some(ref data) => data.as_ref(),
             None => bail!("malformed psi packet, no data"),
@@ -76,10 +75,10 @@ where
 impl<S, E> Stream for Buffer<S>
 where
     S: Stream<Item = ts::TSPacket, Error = E>,
-    E: Debug,
+    E: Into<Error>,
 {
     type Item = Bytes;
-    type Error = failure::Error;
+    type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
         macro_rules! next_valid_packet {
@@ -89,7 +88,7 @@ where
                         Ok(Async::Ready(Some(packet))) => packet,
                         Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
                         Ok(Async::NotReady) => return Ok(Async::NotReady),
-                        Err(e) => bail!("some error {:?}", e),
+                        Err(e) => bail!("some error {:?}", e.into()),
                     };
                     if !packet.transport_error_indicator {
                         break packet;

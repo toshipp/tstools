@@ -1,9 +1,9 @@
 use std::char;
 use std::collections::HashMap;
 
-use failure;
-use failure_derive::Fail;
+use anyhow;
 use log::trace;
+use thiserror;
 
 #[derive(Debug)]
 enum Charset {
@@ -51,7 +51,7 @@ impl Charset {
         out: &mut String,
         drcs_map: &HashMap<u16, String>,
         state: &mut S,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         macro_rules! next {
             () => {
                 iter.next().ok_or(Error::MalformedShortBytes)?
@@ -173,15 +173,15 @@ impl Charset {
     }
 }
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 enum Error {
-    #[fail(display = "unknown code point: 0x{:x} in {:}", 0, 1)]
+    #[error("unknown code point: 0x{0:x} in {0:}")]
     UnknownCodepoint(u32, String),
-    #[fail(display = "unimplemented charset: {:}", 0)]
+    #[error("unimplemented charset: {0:}")]
     UnimplementedCharset(String),
-    #[fail(display = "unimplemented control: 0x{:x}", 0)]
+    #[error("unimplemented control: 0x{0:x}")]
     UnimplementedControl(u8),
-    #[fail(display = "malformed short bytes")]
+    #[error("malformed short bytes")]
     MalformedShortBytes,
 }
 
@@ -356,7 +356,7 @@ impl AribDecoder {
     pub fn decode<'a, I: Iterator<Item = &'a u8>>(
         mut self,
         iter: I,
-    ) -> Result<String, failure::Error> {
+    ) -> Result<String, anyhow::Error> {
         let mut iter = iter.cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
@@ -407,7 +407,7 @@ impl AribDecoder {
         &mut self,
         s: &mut I,
         out: &mut String,
-    ) -> Result<(), failure::Error> {
+    ) -> Result<(), anyhow::Error> {
         macro_rules! next {
             () => {
                 s.next().ok_or(Error::MalformedShortBytes)?

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use failure::{bail, Error};
+use anyhow::{bail, Error};
 use futures::future::lazy;
 use log::info;
 use serde_derive::Serialize;

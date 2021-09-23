@@ -1,4 +1,4 @@
-use failure::Error;
+use anyhow::Error;
 
 pub const SYNCHRONIZED_PES_STREAM_ID: u8 = 0xbd;
 pub const ASYNCHRONOUS_PES_STREAM_ID: u8 = 0xbf;

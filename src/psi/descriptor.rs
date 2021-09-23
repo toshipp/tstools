@@ -1,5 +1,4 @@
-use failure::bail;
-use failure::Error;
+use anyhow::{bail, Error};
 
 #[derive(Debug)]
 pub enum Descriptor<'a> {
