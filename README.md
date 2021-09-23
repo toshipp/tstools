@@ -1,5 +1,3 @@
-[![CircleCI](https://circleci.com/gh/toshipp/tstools.svg?style=svg)](https://circleci.com/gh/toshipp/tstools)
-
 TSTools
 -------
 tools collection for mpeg2-ts.
