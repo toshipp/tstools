@@ -1,22 +1,22 @@
-use lazy_static::lazy_static;
-
-lazy_static! {
-    static ref CRC32_TABLE: [u32; 256] = {
-        let mut table = [0u32; 256];
-        for i in 0..256 {
-            let mut crc = (i as u32) << 24;
-            for _ in 0..8 {
-                if crc & 0x80000000 != 0 {
-                    crc = (crc << 1) ^ 0x04c11db7;
-                } else {
-                    crc <<= 1;
-                }
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut crc = (i as u32) << 24;
+        let mut n = 0;
+        while n < 8 {
+            if crc & 0x80000000 != 0 {
+                crc = (crc << 1) ^ 0x04c11db7;
+            } else {
+                crc <<= 1;
             }
-            table[i] = crc;
+            n += 1;
         }
-        table
-    };
-}
+        table[i] = crc;
+        i += 1;
+    }
+    table
+};
 
 #[allow(dead_code)]
 pub fn crc32(data: &[u8]) -> u32 {

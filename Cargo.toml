@@ -7,7 +7,6 @@ edition = "2018"
 [dependencies]
 anyhow = "1.0"
 thiserror = "1.0"
-lazy_static = "^1.1.0"
 log = "^0.4"
 env_logger = "^0.5.13"
 jisx0213 = { path = "jisx0213" }
