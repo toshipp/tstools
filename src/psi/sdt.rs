@@ -1,4 +1,4 @@
-use anyhow::{bail, Error};
+use anyhow::{bail, Result};
 
 use crate::psi::Descriptor;
 use crate::util;
@@ -20,7 +20,7 @@ pub struct Service<'a> {
 }
 
 impl Service<'_> {
-    fn parse(bytes: &[u8]) -> Result<(Service<'_>, usize), Error> {
+    fn parse(bytes: &[u8]) -> Result<(Service<'_>, usize)> {
         check_len!(bytes.len(), 5);
         let service_id = (u16::from(bytes[0]) << 8) | u16::from(bytes[1]);
         let eit_user_defined_flags = (bytes[2] >> 2) & 0x7;
@@ -70,7 +70,7 @@ pub struct ServiceDescriptionSection<'a> {
 }
 
 impl ServiceDescriptionSection<'_> {
-    pub fn parse(bytes: &[u8]) -> Result<ServiceDescriptionSection<'_>, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<ServiceDescriptionSection<'_>> {
         check_len!(bytes.len(), 11);
         let table_id = bytes[0];
         let section_syntax_indicator = bytes[1] >> 7;

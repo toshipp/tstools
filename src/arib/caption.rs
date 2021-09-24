@@ -1,4 +1,4 @@
-use anyhow::{bail, Error};
+use anyhow::{bail, Result};
 
 use crate::psi;
 
@@ -173,7 +173,7 @@ pub struct Font<'a> {
 }
 
 impl<'a> DataGroup<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<DataGroup, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<DataGroup> {
         let data_group_id = bytes[0] >> 2;
         let data_group_version = bytes[0] & 0x3;
         let data_group_link_number = bytes[1];
@@ -201,7 +201,7 @@ impl<'a> DataGroup<'a> {
 }
 
 impl Language {
-    fn parse(mut bytes: &[u8]) -> Result<(Language, usize), Error> {
+    fn parse(mut bytes: &[u8]) -> Result<(Language, usize)> {
         let mut n = 5;
         let language_tag = bytes[0] >> 5;
         let dmf = bytes[0] & 0xf;
@@ -237,7 +237,7 @@ impl Language {
 }
 
 impl<'a> CaptionManagementData<'a> {
-    fn parse(mut bytes: &[u8]) -> Result<CaptionManagementData, Error> {
+    fn parse(mut bytes: &[u8]) -> Result<CaptionManagementData> {
         let tmd = TMD::from(bytes[0] >> 6);
         let otm = match tmd {
             TMD::OffsetTime => {
@@ -279,7 +279,7 @@ impl<'a> CaptionManagementData<'a> {
 }
 
 impl<'a> CaptionData<'a> {
-    fn parse(mut bytes: &[u8]) -> Result<CaptionData, Error> {
+    fn parse(mut bytes: &[u8]) -> Result<CaptionData> {
         let tmd = TMD::from(bytes[0] >> 6);
         let stm = match tmd {
             TMD::RealTime | TMD::OffsetTime => {
@@ -312,7 +312,7 @@ impl<'a> CaptionData<'a> {
 }
 
 impl<'a> DataUnit<'a> {
-    fn parse(bytes: &[u8]) -> Result<(DataUnit, usize), Error> {
+    fn parse(bytes: &[u8]) -> Result<(DataUnit, usize)> {
         check_len!(bytes.len(), 5);
         let unit_separator = bytes[0];
         let data_unit_parameter = DataUnitParameter::from(bytes[1]);
@@ -331,7 +331,7 @@ impl<'a> DataUnit<'a> {
 }
 
 impl<'a> DrcsDataStructure<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<DrcsDataStructure, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<DrcsDataStructure> {
         let number_of_code = bytes[0];
         let mut bytes = &bytes[1..];
         let mut codes = Vec::new();

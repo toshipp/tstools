@@ -1,5 +1,4 @@
-use anyhow::bail;
-use anyhow::Error;
+use anyhow::{bail, Result};
 
 macro_rules! check_len {
     ($b:expr, $l:expr) => {
@@ -16,7 +15,7 @@ macro_rules! check_len {
     };
 }
 
-pub fn read_u32(bytes: &[u8]) -> Result<u32, Error> {
+pub fn read_u32(bytes: &[u8]) -> Result<u32> {
     if bytes.len() < 4 {
         bail!("too short {}", bytes.len());
     }

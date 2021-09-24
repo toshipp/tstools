@@ -1,9 +1,12 @@
-use anyhow::{bail, Error};
-use bytes::{Bytes, BytesMut};
-use log::warn;
 use std::fmt::Debug;
 use std::mem;
-use tokio::prelude::{Async, Stream};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use anyhow::{anyhow, bail, Result};
+use bytes::{Bytes, BytesMut};
+use log::warn;
+use tokio_stream::Stream;
 
 use crate::ts;
 
@@ -34,17 +37,13 @@ impl<S> Buffer<S> {
         }
     }
 
-    pub fn into_inner(self) -> S {
-        self.inner
-    }
-
-    fn get_bytes(&mut self) -> Result<Bytes, Error> {
+    fn get_bytes(&mut self) -> Result<Bytes> {
         if self.buf.len() < 6 {
             bail!("not enough data");
         }
         let pes_packet_length = (usize::from(self.buf[4]) << 8) | usize::from(self.buf[5]);
         if pes_packet_length == 0 {
-            return Ok(self.buf.take().freeze());
+            return Ok(self.buf.split().freeze());
         }
         if self.buf.len() < pes_packet_length + 6 {
             bail!(
@@ -57,31 +56,28 @@ impl<S> Buffer<S> {
     }
 }
 
-impl<S, E> Stream for Buffer<S>
+impl<S> Stream for Buffer<S>
 where
-    S: Stream<Item = ts::TSPacket, Error = E>,
-    E: Debug,
+    S: Stream<Item = ts::TSPacket> + Unpin,
 {
-    type Item = Bytes;
-    type Error = Error;
+    type Item = Result<Bytes>;
 
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             if let State::Closed = self.state {
-                return Ok(Async::Ready(None));
+                return Poll::Ready(None);
             }
 
-            let packet = match self.inner.poll() {
-                Ok(Async::Ready(Some(packet))) => packet,
-                Ok(Async::Ready(None)) => {
+            let packet = match Pin::new(&mut self.inner).poll_next(cx) {
+                Poll::Ready(Some(packet)) => packet,
+                Poll::Ready(None) => {
                     let old_state = mem::replace(&mut self.state, State::Closed);
                     if let State::Buffering = old_state {
-                        return Ok(Async::Ready(Some(self.get_bytes()?)));
+                        return Poll::Ready(Some(self.get_bytes()));
                     }
-                    return Ok(Async::Ready(None));
+                    return Poll::Ready(None);
                 }
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err(e) => bail!("some error {:?}", e),
+                Poll::Pending => return Poll::Pending,
             };
 
             if packet.transport_error_indicator {
@@ -90,7 +86,7 @@ where
 
             let data = match packet.data {
                 Some(ref data) => data.as_ref(),
-                None => bail!("no data"),
+                None => return Poll::Ready(Some(Err(anyhow!("no data")))),
             };
 
             if packet.payload_unit_start_indicator {
@@ -105,7 +101,7 @@ where
                 self.buf.extend_from_slice(data);
 
                 return match bytes {
-                    Some(Ok(bytes)) => Ok(Async::Ready(Some(bytes))),
+                    Some(Ok(bytes)) => Poll::Ready(Some(Ok(bytes))),
                     Some(Err(e)) => {
                         warn!("an error happened, ignore: {:?}", e);
                         continue;
@@ -126,7 +122,7 @@ where
                 } else {
                     self.state = State::Initial;
                     self.buf.clear();
-                    bail!("pes packet discontinued");
+                    return Poll::Ready(Some(Err(anyhow!("pes packet discontinued"))));
                 }
 
                 self.buf.extend_from_slice(data);

@@ -1,7 +1,10 @@
-use anyhow::{bail, Error};
-use bytes::{Bytes, BytesMut};
 use std::fmt::Debug;
-use tokio::prelude::{Async, Stream};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use anyhow::{bail, Result};
+use bytes::{Bytes, BytesMut};
+use tokio_stream::Stream;
 
 use crate::ts;
 
@@ -14,9 +17,8 @@ enum State {
     Full,
 }
 
-#[derive(Debug)]
 pub struct Buffer<S> {
-    inner: S,
+    s: S,
     state: State,
     counter: u8,
     buf: BytesMut,
@@ -25,24 +27,14 @@ pub struct Buffer<S> {
 impl<S> Buffer<S> {
     pub fn new(stream: S) -> Self {
         Buffer {
-            inner: stream,
+            s: stream,
             state: State::Initial,
             counter: 0,
             buf: BytesMut::with_capacity(INITIAL_BUFFER),
         }
     }
 
-    pub fn into_inner(self) -> S {
-        return self.inner;
-    }
-}
-
-impl<S, E> Buffer<S>
-where
-    S: Stream<Item = ts::TSPacket, Error = E>,
-    E: Into<Error>,
-{
-    fn feed_packet(&mut self, packet: ts::TSPacket) -> Result<(), Error> {
+    fn feed_packet(&mut self, packet: ts::TSPacket) -> Result<()> {
         let bytes = match packet.data {
             Some(ref data) => data.as_ref(),
             None => bail!("malformed psi packet, no data"),
@@ -72,23 +64,20 @@ where
     }
 }
 
-impl<S, E> Stream for Buffer<S>
+impl<S> Stream for Buffer<S>
 where
-    S: Stream<Item = ts::TSPacket, Error = E>,
-    E: Into<Error>,
+    S: Stream<Item = ts::TSPacket> + Unpin,
 {
-    type Item = Bytes;
-    type Error = Error;
+    type Item = Result<Bytes>;
 
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         macro_rules! next_valid_packet {
             () => {{
                 loop {
-                    let packet = match self.inner.poll() {
-                        Ok(Async::Ready(Some(packet))) => packet,
-                        Ok(Async::Ready(None)) => return Ok(Async::Ready(None)),
-                        Ok(Async::NotReady) => return Ok(Async::NotReady),
-                        Err(e) => bail!("some error {:?}", e.into()),
+                    let packet = match Pin::new(&mut self.s).poll_next(cx) {
+                        Poll::Ready(Some(packet)) => packet,
+                        Poll::Ready(None) => return Poll::Ready(None),
+                        Poll::Pending => return Poll::Pending,
                     };
                     if !packet.transport_error_indicator {
                         break packet;
@@ -126,7 +115,7 @@ where
                     let section_length =
                         (usize::from(self.buf[1] & 0xf) << 8) | usize::from(self.buf[2]);
                     let buf = self.buf.split_to(section_length + 3).freeze();
-                    return Ok(Async::Ready(Some(buf)));
+                    return Poll::Ready(Some(Ok(buf)));
                 }
             }
         }

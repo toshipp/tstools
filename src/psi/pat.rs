@@ -1,4 +1,4 @@
-use anyhow::{bail, Error};
+use anyhow::{bail, Result};
 
 use crate::crc32;
 use crate::util;
@@ -19,7 +19,7 @@ pub struct ProgramAssociationSection<'a> {
 }
 
 impl<'a> ProgramAssociationSection<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection<'_>, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<ProgramAssociationSection<'_>> {
         let table_id = bytes[0];
         if table_id != 0 {
             bail!("invalid table_id: {}", table_id);

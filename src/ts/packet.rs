@@ -1,6 +1,6 @@
-use anyhow::{bail, Error};
+use anyhow::{bail, Error, Result};
 use bytes::{Bytes, BytesMut};
-use tokio::codec::Decoder;
+use tokio_util::codec::Decoder;
 
 pub const TS_PACKET_LENGTH: usize = 188;
 const SYNC_BYTE: u8 = 0x47;
@@ -42,7 +42,7 @@ impl Decoder for TSPacketDecoder {
     type Item = TSPacket;
     type Error = Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>> {
         if src.len() < TS_PACKET_LENGTH {
             return Ok(None);
         }
@@ -99,7 +99,7 @@ impl Decoder for TSPacketDecoder {
 }
 
 impl AdaptationField {
-    fn decode(src: &mut Bytes) -> Result<(AdaptationField, usize), Error> {
+    fn decode(src: &mut Bytes) -> Result<(AdaptationField, usize)> {
         check_len!(src.len(), 1);
         let adaptation_field_length = usize::from(src[0]);
         check_len!(src.len(), adaptation_field_length + 1);

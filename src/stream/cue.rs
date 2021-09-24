@@ -1,11 +1,14 @@
 use std::collections::VecDeque;
-use tokio::prelude::{Async, Stream};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use tokio_stream::Stream;
 
 pub struct Cueable<S>
 where
     S: Stream,
 {
-    inner: S,
+    s: S,
     items: VecDeque<S::Item>,
 }
 
@@ -13,13 +16,13 @@ pub struct Cued<S>
 where
     S: Stream,
 {
-    inner: S,
+    s: S,
     items: VecDeque<S::Item>,
 }
 
 pub fn cueable<S: Stream>(s: S) -> Cueable<S> {
     Cueable {
-        inner: s,
+        s,
         items: VecDeque::new(),
     }
 }
@@ -30,7 +33,7 @@ where
 {
     pub fn cue_up(self) -> Cued<S> {
         Cued {
-            inner: self.inner,
+            s: self.s,
             items: self.items,
         }
     }
@@ -38,35 +41,34 @@ where
 
 impl<S, I> Stream for Cueable<S>
 where
-    S: Stream<Item = I>,
-    I: Clone,
+    S: Stream<Item = I> + Unpin,
+    I: Clone + Unpin,
 {
     type Item = S::Item;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        match self.inner.poll() {
-            Ok(Async::Ready(Some(item))) => {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.s).poll_next(cx) {
+            Poll::Ready(Some(item)) => {
                 self.items.push_back(item.clone());
-                Ok(Async::Ready(Some(item)))
+                Poll::Ready(Some(item))
             }
             r @ _ => r,
         }
     }
 }
 
-impl<S> Stream for Cued<S>
+impl<S, I> Stream for Cued<S>
 where
-    S: Stream,
+    S: Stream<Item = I> + Unpin,
+    I: Unpin,
 {
     type Item = S::Item;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(item) = self.items.pop_front() {
-            return Ok(Async::Ready(Some(item)));
+            return Poll::Ready(Some(item));
         }
 
-        self.inner.poll()
+        Pin::new(&mut self.s).poll_next(cx)
     }
 }

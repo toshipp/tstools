@@ -1,4 +1,4 @@
-use anyhow::{bail, Error};
+use anyhow::{bail, Result};
 
 #[derive(Debug)]
 pub enum Descriptor<'a> {
@@ -17,7 +17,7 @@ pub struct ShortEventDescriptor<'a> {
 }
 
 impl<'a> ShortEventDescriptor<'a> {
-    fn parse(bytes: &[u8]) -> Result<ShortEventDescriptor<'_>, Error> {
+    fn parse(bytes: &[u8]) -> Result<ShortEventDescriptor<'_>> {
         let tag = bytes[0];
         if tag != 0x4d {
             bail!("invalid tag");
@@ -46,7 +46,7 @@ pub struct ExtendedEventDescriptorItem<'a> {
 }
 
 impl ExtendedEventDescriptorItem<'_> {
-    fn parse(bytes: &[u8]) -> Result<(ExtendedEventDescriptorItem<'_>, usize), Error> {
+    fn parse(bytes: &[u8]) -> Result<(ExtendedEventDescriptorItem<'_>, usize)> {
         let item_description_length = usize::from(bytes[0]);
         let item_description = &bytes[1..1 + item_description_length];
         let item_length;
@@ -76,7 +76,7 @@ pub struct ExtendedEventDescriptor<'a> {
 }
 
 impl<'a> ExtendedEventDescriptor<'a> {
-    fn parse(bytes: &[u8]) -> Result<ExtendedEventDescriptor<'_>, Error> {
+    fn parse(bytes: &[u8]) -> Result<ExtendedEventDescriptor<'_>> {
         let tag = bytes[0];
         if tag != 0x4e {
             bail!("invalid tag");
@@ -132,7 +132,7 @@ pub enum Genre {
 }
 
 impl ContentDescriptor {
-    fn parse(bytes: &[u8]) -> Result<ContentDescriptor, Error> {
+    fn parse(bytes: &[u8]) -> Result<ContentDescriptor> {
         let tag = bytes[0];
         if tag != 0x54 {
             bail!("invalid tag");
@@ -173,7 +173,7 @@ pub struct StreamIdentifierDescriptor {
 }
 
 impl StreamIdentifierDescriptor {
-    fn parse(bytes: &[u8]) -> Result<StreamIdentifierDescriptor, Error> {
+    fn parse(bytes: &[u8]) -> Result<StreamIdentifierDescriptor> {
         let tag = bytes[0];
         if tag != 0x52 {
             bail!("invalid tag");
@@ -190,7 +190,7 @@ pub struct UnsupportedDescriptor<'a> {
 }
 
 impl<'a> UnsupportedDescriptor<'a> {
-    fn parse(bytes: &[u8]) -> Result<UnsupportedDescriptor<'_>, Error> {
+    fn parse(bytes: &[u8]) -> Result<UnsupportedDescriptor<'_>> {
         let descriptor_tag = bytes[0];
         let length = usize::from(bytes[1]);
         Ok(UnsupportedDescriptor {
@@ -201,7 +201,7 @@ impl<'a> UnsupportedDescriptor<'a> {
 }
 
 impl<'a> Descriptor<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<(Descriptor<'_>, usize), Error> {
+    pub fn parse(bytes: &[u8]) -> Result<(Descriptor<'_>, usize)> {
         check_len!(bytes.len(), 2);
         let descriptor_tag = bytes[0];
         let descriptor_length = usize::from(bytes[1]);

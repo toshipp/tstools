@@ -1,4 +1,4 @@
-use anyhow::{bail, Error};
+use anyhow::{bail, Result};
 
 mod buffer;
 pub use self::buffer::*;
@@ -68,7 +68,7 @@ pub enum PESPacketBody<'a> {
 }
 
 impl<'a> PESPacket<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<PESPacket<'_>, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<PESPacket<'_>> {
         if bytes.len() < 3 + 1 + 2 {
             bail!("too short for PES packet {}", bytes.len());
         }
@@ -112,7 +112,7 @@ impl<'a> PESPacket<'a> {
 }
 
 impl<'a> NormalPESPacketBody<'a> {
-    fn parse(bytes: &[u8]) -> Result<NormalPESPacketBody<'_>, Error> {
+    fn parse(bytes: &[u8]) -> Result<NormalPESPacketBody<'_>> {
         if bytes.len() < 3 {
             bail!("too short for pes packet {}", bytes.len());
         }
@@ -177,19 +177,16 @@ impl<'a> NormalPESPacketBody<'a> {
         additional_copy_info_flag: u8,
         pes_crc_flag: u8,
         pes_extension_flag: u8,
-    ) -> Result<
-        (
-            Option<u64>,
-            Option<u64>,
-            Option<ESCR>,
-            Option<u32>,
-            Option<DSMTrickMode>,
-            Option<u8>,
-            Option<u16>,
-            Option<PESPacketExtension<'_>>,
-        ),
-        Error,
-    > {
+    ) -> Result<(
+        Option<u64>,
+        Option<u64>,
+        Option<ESCR>,
+        Option<u32>,
+        Option<DSMTrickMode>,
+        Option<u8>,
+        Option<u16>,
+        Option<PESPacketExtension<'_>>,
+    )> {
         let (pts, dts) = match pts_dts_flags {
             0b10 => {
                 check_len!(bytes.len(), 5);
@@ -269,7 +266,7 @@ impl<'a> NormalPESPacketBody<'a> {
         ))
     }
 
-    fn parse_extension_fields(mut bytes: &[u8]) -> Result<PESPacketExtension<'_>, Error> {
+    fn parse_extension_fields(mut bytes: &[u8]) -> Result<PESPacketExtension<'_>> {
         check_len!(bytes.len(), 1);
         let pes_private_data_flag = bytes[0] & 0x80 > 0;
         let pack_header_field_flag = bytes[0] & 0x40 > 0;
@@ -338,7 +335,7 @@ impl<'a> NormalPESPacketBody<'a> {
         })
     }
 
-    fn parse_timestamp(bytes: &[u8]) -> Result<u64, Error> {
+    fn parse_timestamp(bytes: &[u8]) -> Result<u64> {
         if bytes.len() < 5 {
             bail!("too short for timestamp {}", bytes.len());
         }
@@ -349,7 +346,7 @@ impl<'a> NormalPESPacketBody<'a> {
             | (u64::from(bytes[4]) >> 1))
     }
 
-    fn parse_escr(bytes: &[u8]) -> Result<ESCR, Error> {
+    fn parse_escr(bytes: &[u8]) -> Result<ESCR> {
         if bytes.len() < 6 {
             bail!("too short for ESCR");
         }

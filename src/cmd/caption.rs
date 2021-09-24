@@ -2,16 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
 
-use anyhow::{bail, Error};
-use futures::future::lazy;
+use anyhow::{bail, Error, Result};
 use log::{debug, info};
 use md5::{Digest, Md5};
 use serde_derive::{Deserialize, Serialize};
 use serde_json;
-use tokio::codec::FramedRead;
-use tokio::prelude::future::{err, ok, Future};
-use tokio::prelude::Stream;
-use tokio::runtime::Builder;
+use tokio_stream::{Stream, StreamExt};
+use tokio_util::codec::FramedRead;
 
 use super::common;
 use super::io::path_to_async_read;
@@ -20,7 +17,7 @@ use crate::pes;
 use crate::stream::cueable;
 use crate::ts;
 
-fn sync_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>, Error> {
+fn sync_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>> {
     if let pes::PESPacketBody::NormalPESPacketBody(ref body) = pes.body {
         arib::pes::SynchronizedPESData::parse(body.pes_packet_data_byte)
             .and_then(|data| arib::caption::DataGroup::parse(data.synchronized_pes_data_byte))
@@ -29,7 +26,7 @@ fn sync_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<
     }
 }
 
-fn async_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>, Error> {
+fn async_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>> {
     if let pes::PESPacketBody::DataBytes(bytes) = pes.body {
         arib::pes::AsynchronousPESData::parse(bytes)
             .and_then(|data| arib::caption::DataGroup::parse(data.asynchronous_pes_data_byte))
@@ -38,7 +35,7 @@ fn async_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup
     }
 }
 
-fn get_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>, Error> {
+fn get_caption<'a>(pes: &'a pes::PESPacket) -> Result<arib::caption::DataGroup<'a>> {
     match pes.stream_id {
         arib::pes::SYNCHRONIZED_PES_STREAM_ID => sync_caption(pes),
         arib::pes::ASYNCHRONOUS_PES_STREAM_ID => async_caption(pes),
@@ -114,18 +111,18 @@ impl DRCSProcessor {
             unknown: HashSet::new(),
             drcs_map: HashMap::new(),
             code_map: HashMap::new(),
-            handle_drcs: handle_drcs,
+            handle_drcs,
         }
     }
 
-    fn load_map(&mut self, path: PathBuf) -> Result<(), Error> {
+    fn load_map(&mut self, path: PathBuf) -> Result<()> {
         let file = File::open(path)?;
         let map: DRCSMap = serde_json::from_reader(file)?;
         self.drcs_map = map.drcs.into_iter().map(|(k, v)| (k.0, v)).collect();
         Ok(())
     }
 
-    fn process(&mut self, data: &[u8]) -> Result<(), Error> {
+    fn process(&mut self, data: &[u8]) -> Result<()> {
         let drcs = arib::caption::DrcsDataStructure::parse(data)?;
         for code in drcs.codes {
             let mut code_str = String::new();
@@ -169,7 +166,7 @@ impl DRCSProcessor {
         self.code_map.clear();
     }
 
-    fn report_error(self) -> Result<(), Error> {
+    fn report_error(self) -> Result<()> {
         if let HandleDRCS::ErrorExit = self.handle_drcs {
             if !self.unknown.is_empty() {
                 bail!("found {} unknown drcs font", self.unknown.len());
@@ -190,7 +187,7 @@ fn dump_caption<'a>(
     data_units: &Vec<arib::caption::DataUnit<'a>>,
     offset: u64,
     drcs_processor: &mut DRCSProcessor,
-) -> Result<(), Error> {
+) -> Result<()> {
     drcs_processor.clear_code_map();
 
     for du in data_units {
@@ -223,54 +220,48 @@ fn dump_caption<'a>(
     Ok(())
 }
 
-fn process_captions<S: Stream<Item = ts::TSPacket, Error = Error>>(
+async fn process_captions<S: Stream<Item = ts::TSPacket> + Unpin>(
     pid: u16,
     base_pts: u64,
-    drcs_processor: DRCSProcessor,
+    mut drcs_processor: DRCSProcessor,
     s: S,
-) -> impl Future<Item = (), Error = Error> {
+) -> Result<()> {
     let caption_stream = s.filter(move |packet| packet.pid == pid);
-    pes::Buffer::new(caption_stream)
-        .fold(drcs_processor, move |mut drcs_processor, bytes| {
-            let pes = match pes::PESPacket::parse(&bytes[..]) {
-                Ok(pes) => pes,
-                Err(e) => {
-                    info!("pes parse error: {:?}", e);
-                    return ok(drcs_processor);
-                }
-            };
-            let offset = match pes.get_pts() {
-                Some(now) => {
-                    // if the caption is designated to be display
-                    // before the first picture,
-                    // ignore it.
-                    if now < base_pts {
-                        return ok(drcs_processor);
-                    }
-                    now - base_pts
-                }
-                _ => return ok(drcs_processor),
-            };
-            let dg = match get_caption(&pes) {
-                Ok(dg) => dg,
-                Err(e) => {
-                    info!("retrieving caption error: {:?}", e);
-                    return ok(drcs_processor);
-                }
-            };
-            let data_units = match dg.data_group_data {
-                arib::caption::DataGroupData::CaptionManagementData(ref cmd) => &cmd.data_units,
-                arib::caption::DataGroupData::CaptionData(ref cd) => &cd.data_units,
-            };
-            if let Err(e) = dump_caption(data_units, offset, &mut drcs_processor) {
-                return err(e);
+    let mut buffer = pes::Buffer::new(caption_stream);
+    while let Some(bytes) = buffer.try_next().await? {
+        let pes = match pes::PESPacket::parse(&bytes[..]) {
+            Ok(pes) => pes,
+            Err(e) => {
+                info!("pes parse error: {:?}", e);
+                continue;
             }
-            ok(drcs_processor)
-        })
-        .then(|result| match result {
-            Ok(drcs_processor) => drcs_processor.report_error(),
-            Err(e) => Err(e),
-        })
+        };
+        let offset = match pes.get_pts() {
+            Some(now) => {
+                // if the caption is designated to be display
+                // before the first picture,
+                // ignore it.
+                if now < base_pts {
+                    continue;
+                }
+                now - base_pts
+            }
+            _ => continue,
+        };
+        let dg = match get_caption(&pes) {
+            Ok(dg) => dg,
+            Err(e) => {
+                info!("retrieving caption error: {:?}", e);
+                continue;
+            }
+        };
+        let data_units = match dg.data_group_data {
+            arib::caption::DataGroupData::CaptionManagementData(ref cmd) => &cmd.data_units,
+            arib::caption::DataGroupData::CaptionData(ref cd) => &cd.data_units,
+        };
+        dump_caption(data_units, offset, &mut drcs_processor)?;
+    }
+    drcs_processor.report_error()
 }
 
 pub enum HandleDRCS {
@@ -282,7 +273,7 @@ pub enum HandleDRCS {
 impl std::str::FromStr for HandleDRCS {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "ignore" => Ok(HandleDRCS::Ignore),
             "fail-fast" => Ok(HandleDRCS::FailFast),
@@ -292,34 +283,24 @@ impl std::str::FromStr for HandleDRCS {
     }
 }
 
-pub fn run(
+pub async fn run(
     input: Option<PathBuf>,
     drcs_map: Option<PathBuf>,
     handle_drcs: HandleDRCS,
-) -> Result<(), Error> {
+) -> Result<()> {
     let mut drcs_processor = DRCSProcessor::new(handle_drcs);
     if let Some(path) = drcs_map {
         drcs_processor.load_map(path)?;
     }
 
-    let proc = lazy(|| {
-        path_to_async_read(input).and_then(|input| {
-            let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
-            let packets = common::strip_error_packets(packets);
-            let cueable_packets = cueable(packets);
-            common::find_main_meta(cueable_packets).and_then(|(meta, s)| {
-                let packets = s.cue_up();
-                let cueable_packets = cueable(packets);
-                common::find_first_picture_pts(meta.video_pid, cueable_packets).and_then(
-                    move |(pts, s)| {
-                        let packets = s.cue_up();
-                        process_captions(meta.caption_pid, pts, drcs_processor, packets)
-                    },
-                )
-            })
-        })
-    });
-
-    let rt = Builder::new().build()?;
-    rt.block_on_all(proc)
+    let input = path_to_async_read(input).await?;
+    let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
+    let packets = common::strip_error_packets(packets);
+    let mut cueable_packets = cueable(packets);
+    let meta = common::find_main_meta(&mut cueable_packets).await?;
+    let packets = cueable_packets.cue_up();
+    let mut cueable_packets = cueable(packets);
+    let pts = common::find_first_picture_pts(meta.video_pid, &mut cueable_packets).await?;
+    let packets = cueable_packets.cue_up();
+    process_captions(meta.caption_pid, pts, drcs_processor, packets).await
 }

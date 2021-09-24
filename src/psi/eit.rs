@@ -3,7 +3,7 @@ use chrono;
 use self::chrono::offset::{FixedOffset, TimeZone};
 use self::chrono::{DateTime, Duration};
 
-use anyhow::{bail, Error};
+use anyhow::{bail, Result};
 
 use crate::util;
 
@@ -48,7 +48,7 @@ pub struct EventInformationSection<'a> {
 }
 
 impl<'a> Event<'a> {
-    fn parse(bytes: &[u8]) -> Result<(Event<'_>, usize), Error> {
+    fn parse(bytes: &[u8]) -> Result<(Event<'_>, usize)> {
         check_len!(bytes.len(), 12);
         let event_id = (u16::from(bytes[0]) << 8) | u16::from(bytes[1]);
         let start_time = Event::parse_datetime(&bytes[2..7])?;
@@ -79,7 +79,7 @@ impl<'a> Event<'a> {
         ))
     }
 
-    fn parse_datetime(bytes: &[u8]) -> Result<Option<DateTime<FixedOffset>>, Error> {
+    fn parse_datetime(bytes: &[u8]) -> Result<Option<DateTime<FixedOffset>>> {
         if (&bytes[..5]).iter().all(|x| *x == 0xff) {
             return Ok(None);
         }
@@ -125,7 +125,7 @@ impl<'a> Event<'a> {
         (year, month, day)
     }
 
-    fn parse_hms(bytes: &[u8]) -> Result<Option<(u8, u8, u8)>, Error> {
+    fn parse_hms(bytes: &[u8]) -> Result<Option<(u8, u8, u8)>> {
         // if the duration is unspecified, all bits are 1.
         if bytes[0] == 0xff && bytes[1] == 0xff && bytes[2] == 0xff {
             return Ok(None);
@@ -139,7 +139,7 @@ impl<'a> Event<'a> {
 }
 
 impl<'a> EventInformationSection<'a> {
-    pub fn parse(bytes: &[u8]) -> Result<EventInformationSection<'_>, Error> {
+    pub fn parse(bytes: &[u8]) -> Result<EventInformationSection<'_>> {
         let table_id = bytes[0];
         let section_syntax_indicator = bytes[1] >> 7;
         let section_length = (usize::from(bytes[1] & 0xf) << 8) | usize::from(bytes[2]);

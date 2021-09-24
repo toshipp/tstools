@@ -1,7 +1,7 @@
 use std::char;
 use std::collections::HashMap;
 
-use anyhow;
+use anyhow::Result;
 use log::trace;
 use thiserror;
 
@@ -51,7 +51,7 @@ impl Charset {
         out: &mut String,
         drcs_map: &HashMap<u16, String>,
         state: &mut S,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<()> {
         macro_rules! next {
             () => {
                 iter.next().ok_or(Error::MalformedShortBytes)?
@@ -353,10 +353,7 @@ impl AribDecoder {
         self.drcs_map = drcs_map;
     }
 
-    pub fn decode<'a, I: Iterator<Item = &'a u8>>(
-        mut self,
-        iter: I,
-    ) -> Result<String, anyhow::Error> {
+    pub fn decode<'a, I: Iterator<Item = &'a u8>>(mut self, iter: I) -> Result<String> {
         let mut iter = iter.cloned().peekable();
         let mut string = String::new();
         while let Some(&b) = iter.peek() {
@@ -403,11 +400,7 @@ impl AribDecoder {
         }
     }
 
-    fn control<I: Iterator<Item = u8>>(
-        &mut self,
-        s: &mut I,
-        out: &mut String,
-    ) -> Result<(), anyhow::Error> {
+    fn control<I: Iterator<Item = u8>>(&mut self, s: &mut I, out: &mut String) -> Result<()> {
         macro_rules! next {
             () => {
                 s.next().ok_or(Error::MalformedShortBytes)?

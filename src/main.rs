@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Error;
+use anyhow::Result;
 use env_logger;
 use structopt::StructOpt;
 
@@ -36,18 +36,19 @@ enum Opt {
     },
 }
 
-fn main() -> Result<(), Error> {
+#[tokio::main]
+async fn main() -> Result<()> {
     env_logger::init();
 
     let opt = Opt::from_args();
     match opt {
-        Opt::Events { input } => cmd::events::run(input),
+        Opt::Events { input } => cmd::events::run(input).await,
         Opt::Caption {
             input,
             drcs_map,
             handle_drcs,
-        } => cmd::caption::run(input, drcs_map, handle_drcs),
-        Opt::Jitter { input } => cmd::jitter::run(input),
-        Opt::Clean { input, output } => cmd::clean::run(input, output),
+        } => cmd::caption::run(input, drcs_map, handle_drcs).await,
+        Opt::Jitter { input } => cmd::jitter::run(input).await,
+        Opt::Clean { input, output } => cmd::clean::run(input, output).await,
     }
 }
