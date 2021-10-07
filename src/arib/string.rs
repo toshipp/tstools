@@ -599,8 +599,11 @@ impl AribDecoder {
             RPC => {
                 return Err(Error::UnimplementedControl(s0).into());
             }
-            STL | SPL => {
-                return Err(Error::UnimplementedControl(s0).into());
+            STL => {
+                trace!("STL");
+            }
+            SPL => {
+                trace!("SPL");
             }
             HLC => {
                 let param = next!();
