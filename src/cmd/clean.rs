@@ -88,7 +88,7 @@ async fn find_keep_pids_from_pmt<S: Stream<Item = ts::TSPacket> + Unpin>(
                 }
             }
             Some(Err(e)) => return Err(e),
-            None => bail!("no pids found"),
+            None => bail!("no keep pids found"),
         }
     }
 }
@@ -194,7 +194,9 @@ async fn dump_packets<S: Stream<Item = ts::TSPacket> + Unpin>(
 ) -> Result<()> {
     while let Some(packet) = s.next().await {
         if packet.pid == ts::PAT_PID {
-            out.write(&retain_keep_pids(packet, &pids)[..]).await?;
+            if !packet.transport_error_indicator {
+                out.write(&retain_keep_pids(packet, &pids)[..]).await?;
+            }
         } else if pids.contains(&packet.pid) {
             out.write(&packet.into_raw()[..]).await?;
         }
