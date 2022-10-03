@@ -33,6 +33,8 @@ enum Opt {
     Clean {
         input: Option<PathBuf>,
         output: Option<PathBuf>,
+        #[structopt(long = "service-index")]
+        service_index: Option<usize>,
     },
 }
 
@@ -49,6 +51,10 @@ async fn main() -> Result<()> {
             handle_drcs,
         } => cmd::caption::run(input, drcs_map, handle_drcs).await,
         Opt::Jitter { input } => cmd::jitter::run(input).await,
-        Opt::Clean { input, output } => cmd::clean::run(input, output).await,
+        Opt::Clean {
+            input,
+            output,
+            service_index,
+        } => cmd::clean::run(input, output, service_index).await,
     }
 }

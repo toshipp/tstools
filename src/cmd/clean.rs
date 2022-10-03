@@ -21,6 +21,7 @@ use crate::ts;
 
 async fn find_pids_from_pat<S: Stream<Item = ts::TSPacket> + Unpin>(
     s: &mut S,
+    service_index: Option<usize>,
 ) -> Result<(Option<u16>, HashSet<u16>)> {
     let pat_stream = s.filter(|packet| packet.pid == ts::PAT_PID);
     let mut buffer = psi::Buffer::new(pat_stream);
@@ -39,11 +40,19 @@ async fn find_pids_from_pat<S: Stream<Item = ts::TSPacket> + Unpin>(
                     };
                     let mut network_pid = None;
                     let mut pmt_pids = HashSet::new();
+                    let mut idx = 0usize;
                     for (program_number, pid) in pas.program_association {
                         if program_number == 0 {
                             network_pid = Some(pid);
                         } else {
-                            pmt_pids.insert(pid);
+                            info!(
+                                "found PMT program_number={:?}, pid={:?}",
+                                program_number, pid
+                            );
+                            if service_index.is_none() || idx == service_index.unwrap() {
+                                pmt_pids.insert(pid);
+                            }
+                            idx += 1;
                         }
                     }
 
@@ -134,8 +143,11 @@ async fn find_keep_pids_from_pmts<S: Stream<Item = ts::TSPacket> + Unpin>(
     tokio::join!(transfer, receiver).1
 }
 
-async fn find_keep_pids<S: Stream<Item = ts::TSPacket> + Unpin>(s: &mut S) -> Result<HashSet<u16>> {
-    let (network_pid, pmt_pids) = find_pids_from_pat(s).await?;
+async fn find_keep_pids<S: Stream<Item = ts::TSPacket> + Unpin>(
+    s: &mut S,
+    service_index: Option<usize>,
+) -> Result<HashSet<u16>> {
+    let (network_pid, pmt_pids) = find_pids_from_pat(s, service_index).await?;
     let mut keep_pids = find_keep_pids_from_pmts(pmt_pids, s).await?;
     if let Some(network_pid) = network_pid {
         keep_pids.insert(network_pid);
@@ -204,13 +216,17 @@ async fn dump_packets<S: Stream<Item = ts::TSPacket> + Unpin>(
     Ok(())
 }
 
-pub async fn run(input: Option<PathBuf>, output: Option<PathBuf>) -> Result<()> {
+pub async fn run(
+    input: Option<PathBuf>,
+    output: Option<PathBuf>,
+    service_index: Option<usize>,
+) -> Result<()> {
     let input = path_to_async_read(input).await?;
     let output = path_to_async_write(output).await?;
     let packets = FramedRead::new(input, ts::TSPacketDecoder::new());
     let packets = strip_error_packets(packets);
     let mut cueable_packets = cueable(packets);
-    let pids = find_keep_pids(&mut cueable_packets).await?;
+    let pids = find_keep_pids(&mut cueable_packets, service_index).await?;
     let packets = cueable_packets.cue_up();
     dump_packets(packets, pids, output).await
 }
