@@ -146,7 +146,9 @@ async fn find_service_ids<S: Stream<Item = ts::TSPacket> + Unpin>(s: &mut S) -> 
                     }
                 }
             }
-            Some(Err(e)) => return Err(e),
+            Some(Err(e)) => {
+                info!("find_service_id: {:?}", e);
+            }
             None => bail!("no sid found"),
         }
     }
@@ -155,7 +157,7 @@ async fn find_service_ids<S: Stream<Item = ts::TSPacket> + Unpin>(s: &mut S) -> 
 fn packets_to_events<S: Stream<Item = ts::TSPacket> + Unpin>(
     sids: Vec<u16>,
     s: S,
-) -> impl Stream<Item = Result<Vec<Event>>> {
+) -> impl Stream<Item = Vec<Event>> {
     psi::Buffer::new(s).filter_map(move |bytes| match bytes {
         Ok(bytes) => {
             let bytes = &bytes[..];
@@ -165,7 +167,7 @@ fn packets_to_events<S: Stream<Item = ts::TSPacket> + Unpin>(
                     Ok(eit) => {
                         if sids.contains(&eit.service_id) {
                             if let Ok(events) = try_into_event(eit) {
-                                return Some(Ok(events));
+                                return Some(events);
                             }
                         }
                     }
@@ -176,14 +178,17 @@ fn packets_to_events<S: Stream<Item = ts::TSPacket> + Unpin>(
             }
             None
         }
-        Err(e) => Some(Err(e)),
+        Err(e) => {
+            info!("packets_to_events: {:?}", e);
+            None
+        }
     })
 }
 
 fn into_event_stream<S: Stream<Item = ts::TSPacket> + Send + 'static + Unpin>(
     service_ids: Vec<u16>,
     mut s: S,
-) -> impl Stream<Item = Result<Vec<Event>>> {
+) -> impl Stream<Item = Vec<Event>> {
     let (event_tx, event_rx) = channel(1);
     let mut tx_map = HashMap::new();
     for pid in ts::EIT_PIDS.iter() {
@@ -213,11 +218,11 @@ fn into_event_stream<S: Stream<Item = ts::TSPacket> + Send + 'static + Unpin>(
     ReceiverStream::new(event_rx)
 }
 
-async fn into_event_map<S: Stream<Item = Result<Vec<Event>>> + Unpin>(
+async fn into_event_map<S: Stream<Item = Vec<Event>> + Unpin>(
     mut s: S,
 ) -> Result<BTreeMap<u16, Event>> {
     let mut out = BTreeMap::new();
-    while let Some(events) = s.try_next().await? {
+    while let Some(events) = s.next().await {
         for event in events.into_iter() {
             out.insert(event.id, event);
         }
