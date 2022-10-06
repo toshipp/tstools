@@ -62,7 +62,7 @@ async fn find_meta<S: Stream<Item = ts::TSPacket> + Unpin>(pid: u16, s: &mut S) 
                     }
                 }
             }
-            Some(Err(e)) => return Err(e),
+            Some(Err(e)) => return Err(e.into()),
             None => bail!("no meta found"),
         }
     }
@@ -93,7 +93,7 @@ async fn find_main_pmt_pid<S: Stream<Item = ts::TSPacket> + Unpin>(s: &mut S) ->
                     }
                 }
             }
-            Some(Err(e)) => return Err(e),
+            Some(Err(e)) => return Err(e.into()),
             None => bail!("no pid found"),
         }
     }

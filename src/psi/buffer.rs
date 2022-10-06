@@ -2,13 +2,23 @@ use std::fmt::Debug;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::{bail, Result};
 use bytes::{Bytes, BytesMut};
+use thiserror;
 use tokio_stream::Stream;
 
 use crate::ts;
 
 const INITIAL_BUFFER: usize = 4096;
+
+#[derive(Debug, thiserror::Error)]
+pub enum BufferError {
+    #[error("malformed psi packet, no data")]
+    MalformedNoData,
+    #[error("malformed psi packet, no section header in the packet")]
+    MalformedNoSectionHeader,
+    #[error("discontinued psi packet")]
+    Discontinued,
+}
 
 #[derive(Debug)]
 enum State {
@@ -34,15 +44,15 @@ impl<S> Buffer<S> {
         }
     }
 
-    fn feed_packet(&mut self, packet: ts::TSPacket) -> Result<()> {
+    fn feed_packet(&mut self, packet: ts::TSPacket) -> Result<(), BufferError> {
         let bytes = match packet.data {
             Some(ref data) => data.as_ref(),
-            None => bail!("malformed psi packet, no data"),
+            None => return Err(BufferError::MalformedNoData),
         };
         if packet.payload_unit_start_indicator {
             let pointer_field = usize::from(bytes[0]);
             if bytes.len() < pointer_field + 1 {
-                bail!("malformed psi packet, no section header in the packet");
+                return Err(BufferError::MalformedNoSectionHeader);
             }
             self.buf.clear();
             self.buf.extend_from_slice(&bytes[pointer_field + 1..]);
@@ -56,7 +66,7 @@ impl<S> Buffer<S> {
                 self.counter = packet.continuity_counter;
             } else {
                 self.state = State::Initial;
-                bail!("psi packet discontinued");
+                return Err(BufferError::Discontinued);
             }
             self.buf.extend_from_slice(bytes);
         }
@@ -68,7 +78,7 @@ impl<S> Stream for Buffer<S>
 where
     S: Stream<Item = ts::TSPacket> + Unpin,
 {
-    type Item = Result<Bytes>;
+    type Item = Result<Bytes, BufferError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         macro_rules! next_valid_packet {

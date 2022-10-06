@@ -59,7 +59,7 @@ async fn find_pids_from_pat<S: Stream<Item = ts::TSPacket> + Unpin>(
                     return Ok((network_pid, pmt_pids));
                 }
             }
-            Some(Err(e)) => return Err(e),
+            Some(Err(e)) => return Err(e.into()),
             None => bail!("no pids found"),
         }
     }
@@ -96,7 +96,7 @@ async fn find_keep_pids_from_pmt<S: Stream<Item = ts::TSPacket> + Unpin>(
                     return Ok(pids);
                 }
             }
-            Some(Err(e)) => return Err(e),
+            Some(Err(e)) => return Err(e.into()),
             None => bail!("no keep pids found"),
         }
     }
