@@ -8,5 +8,5 @@ jobs:
       - run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           cargo install cargo-audit
-      - run: cargo audit --ignore RUSTSEC-2020-0159 --ignore RUSTSEC-2020-0071
+      - run: cargo audit --ignore RUSTSEC-2020-0071
       - run: cargo test --all
