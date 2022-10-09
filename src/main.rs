@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use env_logger;
-use structopt::StructOpt;
 
 #[macro_use]
 mod util;
@@ -15,25 +15,31 @@ mod psi;
 mod stream;
 mod ts;
 
-#[derive(StructOpt)]
-enum Opt {
-    #[structopt(name = "events")]
-    Events { input: Option<PathBuf> },
-    #[structopt(name = "caption")]
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    Events {
+        input: Option<PathBuf>,
+    },
     Caption {
         input: Option<PathBuf>,
-        #[structopt(long = "drcs-map")]
+        #[arg(long = "drcs-map")]
         drcs_map: Option<PathBuf>,
-        #[structopt(long = "handle-drcs", default_value = "error-exit")]
+        #[arg(long = "handle-drcs", value_enum, default_value = "error-exit")]
         handle_drcs: cmd::caption::HandleDRCS,
     },
-    #[structopt(name = "jitter")]
-    Jitter { input: Option<PathBuf> },
-    #[structopt(name = "clean")]
+    Jitter {
+        input: Option<PathBuf>,
+    },
     Clean {
         input: Option<PathBuf>,
         output: Option<PathBuf>,
-        #[structopt(long = "service-index")]
+        #[arg(long = "service-index")]
         service_index: Option<usize>,
     },
 }
@@ -42,16 +48,16 @@ enum Opt {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let opt = Opt::from_args();
-    match opt {
-        Opt::Events { input } => cmd::events::run(input).await,
-        Opt::Caption {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Events { input } => cmd::events::run(input).await,
+        Command::Caption {
             input,
             drcs_map,
             handle_drcs,
         } => cmd::caption::run(input, drcs_map, handle_drcs).await,
-        Opt::Jitter { input } => cmd::jitter::run(input).await,
-        Opt::Clean {
+        Command::Jitter { input } => cmd::jitter::run(input).await,
+        Command::Clean {
             input,
             output,
             service_index,

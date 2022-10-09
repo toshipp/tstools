@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
 
-use anyhow::{bail, Error, Result};
+use anyhow::{bail, Result};
+use clap::ValueEnum;
 use log::{debug, info};
 use md5::{Digest, Md5};
 use serde_derive::{Deserialize, Serialize};
@@ -264,23 +265,11 @@ async fn process_captions<S: Stream<Item = ts::TSPacket> + Unpin>(
     drcs_processor.report_error()
 }
 
+#[derive(ValueEnum, Clone)]
 pub enum HandleDRCS {
     Ignore,
     FailFast,
     ErrorExit,
-}
-
-impl std::str::FromStr for HandleDRCS {
-    type Err = Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "ignore" => Ok(HandleDRCS::Ignore),
-            "fail-fast" => Ok(HandleDRCS::FailFast),
-            "error-exit" => Ok(HandleDRCS::ErrorExit),
-            s => bail!("unknown option: {}", s),
-        }
-    }
 }
 
 pub async fn run(
