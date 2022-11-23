@@ -93,11 +93,11 @@ impl<'a> Event<'a> {
         let (hh, mm, ss) = Event::parse_hms(&bytes[2..])?.unwrap();
 
         Ok(Some(
-            FixedOffset::east(9 * 3600).ymd(y as i32, m, d).and_hms(
-                u32::from(hh),
-                u32::from(mm),
-                u32::from(ss),
-            ),
+            FixedOffset::east_opt(9 * 3600)
+                .unwrap()
+                .with_ymd_and_hms(y as i32, m, d, u32::from(hh), u32::from(mm), u32::from(ss))
+                .single()
+                .unwrap(),
         ))
     }
 
