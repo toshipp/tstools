@@ -119,13 +119,12 @@ where
                     continue;
                 } else if (self.counter + 1) % 16 == packet.continuity_counter {
                     self.counter = packet.continuity_counter;
+                    self.buf.extend_from_slice(data);
                 } else {
                     self.state = State::Initial;
                     self.buf.clear();
                     return Poll::Ready(Some(Err(anyhow!("pes packet discontinued"))));
                 }
-
-                self.buf.extend_from_slice(data);
             }
         }
     }

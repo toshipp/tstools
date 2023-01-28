@@ -74,9 +74,12 @@ impl<'a> PESPacket<'a> {
         }
         let packet_start_code_prefix =
             (u32::from(bytes[0]) << 16) | (u32::from(bytes[1]) << 8) | u32::from(bytes[2]);
+        if packet_start_code_prefix != 1 {
+            bail!("invalid start code prefix: {}", packet_start_code_prefix);
+        }
         let stream_id = bytes[3];
         let mut pes_packet_length = (usize::from(bytes[4]) << 8) | usize::from(bytes[5]);
-        // TODO
+        // TODO?: 0 means unspecified or unbounded length.
         if pes_packet_length == 0 {
             pes_packet_length = bytes.len() - 6;
         }

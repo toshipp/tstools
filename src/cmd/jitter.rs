@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Result};
-use log::info;
+use log::{info, warn};
 use serde_derive::Serialize;
 use serde_json;
 use tokio_stream::{Stream, StreamExt};
@@ -25,7 +25,7 @@ async fn find_first_audio_pts<S: Stream<Item = ts::TSPacket> + Unpin>(
                 let pes = match pes::PESPacket::parse(&bytes[..]) {
                     Ok(pes) => pes,
                     Err(e) => {
-                        info!("pes parse error: {:?}", e);
+                        warn!("pes parse error: {:?}", e);
                         continue;
                     }
                 };
@@ -53,12 +53,13 @@ pub async fn run(input: Option<PathBuf>) -> Result<()> {
     let packets = cueable_packets.cue_up();
     let mut cueable_packets = cueable(packets);
     let video_pts = common::find_first_picture_pts(meta.video_pid, &mut cueable_packets).await?;
+    info!("video pts {}", video_pts);
     let packets = cueable_packets.cue_up();
     let audio_pts = find_first_audio_pts(meta.audio_pid, packets).await?;
+    info!("audio pts {}", audio_pts);
     let jitter = Jitter {
         jitter: f64::from((video_pts - audio_pts) as u32) / 90000f64,
     };
-    info!("vpts {} apts {}", video_pts, audio_pts);
     println!("{}", serde_json::to_string(&jitter)?);
     Ok(())
 }
