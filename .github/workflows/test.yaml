@@ -1,12 +1,15 @@
 name: ci
-on: [push]
+on:
+  push:
+    branches:
+      - "*"
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    container: rust:bullseye
     steps:
       - uses: actions/checkout@v3
-      - run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          cargo install cargo-audit
+      - run: cargo install cargo-audit
       - run: cargo audit --ignore RUSTSEC-2020-0071
       - run: cargo test --all
