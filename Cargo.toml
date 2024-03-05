@@ -1,6 +1,6 @@
 [package]
 name = "tstools"
-version = "0.1.9"
+version = "0.1.10"
 authors = ["toshi_pp <toshiq2@gmail.com>"]
 edition = "2021"
 
@@ -8,7 +8,7 @@ edition = "2021"
 anyhow = "1"
 thiserror = "1"
 log = "0.4"
-env_logger = "0.9"
+env_logger = "0.11"
 jisx0213 = { path = "jisx0213" }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json = "1"
